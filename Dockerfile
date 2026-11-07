@@ -18,6 +18,7 @@ RUN uv sync --frozen --no-install-project --no-dev
 
 COPY src ./src
 COPY migrations ./migrations
+COPY alembic.ini ./
 RUN uv sync --frozen --no-dev
 
 CMD ["uvicorn", "scribe.presentation.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

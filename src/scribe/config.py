@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     minio_bucket_exports: str = "exports"
 
     # Security
-    jwt_secret: SecretStr = Field(default=SecretStr("change-me-in-prod"))
+    jwt_secret: SecretStr = Field(default=SecretStr("dev-only-secret-change-me-in-prod-0123456789"))
     jwt_algorithm: str = "HS256"
     access_token_ttl_min: int = 15
     refresh_token_ttl_days: int = 7

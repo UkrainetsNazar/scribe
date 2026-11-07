@@ -65,6 +65,14 @@ services:
     ports: ["9000:9000", "9001:9001"]
     volumes: [minio_data:/data]
 
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
   api:
     build: .
     environment: *app-env
@@ -75,6 +83,7 @@ services:
       redis: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       minio: { condition: service_started }
+      migrate: { condition: service_completed_successfully }
 
 volumes:
   pg_data:
