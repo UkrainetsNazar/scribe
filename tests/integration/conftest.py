@@ -6,8 +6,8 @@ import pytest
 from alembic import command
 from asgi_lifespan import LifespanManager
 from dependency_injector import providers
-from testcontainers.postgres import PostgresContainer
-from testcontainers.redis import RedisContainer
+from testcontainers.community.postgres import PostgresContainer
+from testcontainers.community.redis import RedisContainer
 
 from scribe.config import Settings
 from scribe.container import Container

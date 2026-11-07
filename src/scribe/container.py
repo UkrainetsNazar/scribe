@@ -8,10 +8,10 @@ from scribe.application.use_cases.auth import (
     RegisterUser,
 )
 from scribe.config import Settings
-from scribe.infrastructure.db.session import create_session_factory, init_engine
+from scribe.infrastructure.db.session import create_engine, create_session_factory
 from scribe.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from scribe.infrastructure.logging_config import configure_logging
-from scribe.infrastructure.redis_client import init_redis
+from scribe.infrastructure.redis_client import create_redis
 from scribe.infrastructure.security.passwords import Argon2PasswordHasher
 from scribe.infrastructure.security.refresh_store import RedisRefreshTokenStore
 from scribe.infrastructure.security.tokens import JwtTokenService
@@ -28,8 +28,10 @@ class Container(containers.DeclarativeContainer):
         level=settings.provided.log_level,
         json_logs=settings.provided.log_json,
     )
-    engine = providers.Resource(init_engine, url=settings.provided.database_url)
-    redis = providers.Resource(init_redis, url=settings.provided.redis_url)
+
+    # ── Clients ──
+    engine = providers.Singleton(create_engine, url=settings.provided.database_url)
+    redis = providers.Singleton(create_redis, url=settings.provided.redis_url)
 
     session_factory = providers.Singleton(create_session_factory, engine=engine)
 

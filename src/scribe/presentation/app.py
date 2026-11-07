@@ -1,6 +1,5 @@
-from collections.abc import AsyncGenerator, Awaitable
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import cast
 
 import structlog
 from fastapi import FastAPI
@@ -20,14 +19,15 @@ def create_app(container: Container | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-        # dependency-injector's stubs type these as `Awaitable | None`
-        await cast(Awaitable[None], container.init_resources())
+        container.init_resources()
         log.info("app.startup", env=container.settings().app_env)
         try:
             yield
         finally:
             log.info("app.shutdown")
-            await cast(Awaitable[None], container.shutdown_resources())
+            await container.engine().dispose()
+            await container.redis().aclose()
+            container.shutdown_resources()
             container.unwire()
 
     app = FastAPI(title="Scribe API", version="1.0.0", lifespan=lifespan)
