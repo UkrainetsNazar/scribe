@@ -1,31 +1,13 @@
-from uuid import UUID
-
 import pytest
 from pydantic import SecretStr
 
-from scribe.application.interfaces import UnitOfWork, UnitOfWorkFactory
+from scribe.application.interfaces import UnitOfWorkFactory
 from scribe.application.use_cases.auth import LoginUser, LogoutUser, RefreshTokens, RegisterUser
 from scribe.domain.errors import EmailTakenError, UnauthorizedError
-from scribe.domain.users import Plan, User
 from scribe.infrastructure.security.tokens import JwtTokenService
-from tests.unit.fakes import FakePasswordHasher, FakeUnitOfWork, InMemoryRefreshTokenStore
+from tests.unit.fakes import FakePasswordHasher, InMemoryRefreshTokenStore
 
 PASSWORD = "correct-horse-1"
-
-
-@pytest.fixture
-def users() -> dict[UUID, User]:
-    return {}
-
-
-@pytest.fixture
-def uow_factory(users: dict[UUID, User]) -> UnitOfWorkFactory:
-    plans = {"free": Plan(id=1, name="free", monthly_minutes=300, max_file_mb=500)}
-
-    def factory() -> UnitOfWork:
-        return FakeUnitOfWork(users, plans)
-
-    return factory
 
 
 @pytest.fixture

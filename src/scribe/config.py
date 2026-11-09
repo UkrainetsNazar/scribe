@@ -36,9 +36,16 @@ class Settings(BaseSettings):
     minio_access_key: str = "scribe"
     minio_secret_key: SecretStr = SecretStr("scribe-secret")
     minio_secure: bool = False
+
+    minio_public_endpoint: str = "localhost:9000"
+    minio_public_secure: bool = False
     minio_bucket_uploads: str = "uploads"
     minio_bucket_artifacts: str = "artifacts"
     minio_bucket_exports: str = "exports"
+
+    # Media probing
+    ffprobe_bin: str = "ffprobe"
+    ffprobe_timeout_sec: float = 30.0
 
     # Security
     jwt_secret: SecretStr = Field(default=SecretStr("dev-only-secret-change-me-in-prod-0123456789"))

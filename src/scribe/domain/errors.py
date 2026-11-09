@@ -39,3 +39,38 @@ class InvalidStateError(AppError):
 class EmailTakenError(AppError):
     code = "EMAIL_TAKEN"
     default_message = "Email is already registered"
+
+
+class DomainValidationError(AppError):
+    code = "VALIDATION_ERROR"
+    default_message = "Validation failed"
+
+
+class FileTooLargeError(AppError):
+    code = "FILE_TOO_LARGE"
+    default_message = "File is too large"
+
+
+class UnsupportedMediaError(AppError):
+    code = "UNSUPPORTED_MEDIA"
+    default_message = "Unsupported media type"
+
+
+class InvalidMediaError(AppError):
+    code = "INVALID_MEDIA"
+    default_message = "File is not a valid audio/video file"
+
+
+class UploadMissingError(AppError):
+    code = "UPLOAD_MISSING"
+    default_message = "File has not been uploaded yet"
+
+
+class ProjectNameTakenError(AppError):
+    code = "PROJECT_NAME_TAKEN"
+    default_message = "A project with this name already exists"
+
+
+class DependencyUnavailableError(AppError):
+    code = "DEPENDENCY_UNAVAILABLE"
+    default_message = "A required dependency is unavailable"

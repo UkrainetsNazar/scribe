@@ -1,16 +1,47 @@
+from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Self
+from typing import Any, Self
 from uuid import UUID
 
 from scribe.application.interfaces import (
+    MediaInfo,
+    MediaProbe,
+    ObjectStorage,
     PasswordHasher,
     PlanRepository,
+    ProjectRepository,
+    RecordingRepository,
     RefreshTokenStore,
+    StoredObject,
     UnitOfWork,
     UserRepository,
 )
-from scribe.domain.errors import EmailTakenError
+from scribe.application.pagination import Cursor
+from scribe.domain.errors import EmailTakenError, InvalidMediaError
+from scribe.domain.events import DomainEvent
+from scribe.domain.projects import Project
+from scribe.domain.recordings import Recording, RecordingStatus
 from scribe.domain.users import Plan, User
+
+FREE_PLAN = Plan(id=1, name="free", monthly_minutes=300, max_file_mb=500)
+
+
+@dataclass
+class FakeDb:
+    """Shared in-memory state; every FakeUnitOfWork works on the same instance."""
+
+    users: dict[UUID, User] = field(default_factory=dict)
+    plans: dict[str, Plan] = field(default_factory=lambda: {"free": FREE_PLAN})
+    projects: dict[UUID, Project] = field(default_factory=dict)
+    recordings: dict[UUID, Recording] = field(default_factory=dict)
+    events: list[DomainEvent] = field(default_factory=list)  # committed events
+
+
+def _paginate(items: list[Any], cursor: Cursor | None, limit: int) -> list[Any]:
+    ordered = sorted(items, key=lambda i: (i.created_at, i.id), reverse=True)
+    if cursor is not None:
+        ordered = [i for i in ordered if (i.created_at, i.id) < (cursor.created_at, cursor.id)]
+    return ordered[: limit + 1]
 
 
 class InMemoryUserRepository(UserRepository):
@@ -37,11 +68,81 @@ class InMemoryPlanRepository(PlanRepository):
         return self._plans.get(name)
 
 
+class InMemoryProjectRepository(ProjectRepository):
+    def __init__(self, projects: dict[UUID, Project]) -> None:
+        self._projects = projects
+
+    def _alive(self, owner_id: UUID) -> list[Project]:
+        return [
+            p for p in self._projects.values() if p.owner_id == owner_id and p.deleted_at is None
+        ]
+
+    async def add(self, project: Project) -> None:
+        self._projects[project.id] = project
+
+    async def get(self, project_id: UUID, owner_id: UUID) -> Project | None:
+        return next((p for p in self._alive(owner_id) if p.id == project_id), None)
+
+    async def get_by_name(self, owner_id: UUID, name: str) -> Project | None:
+        return next((p for p in self._alive(owner_id) if p.name == name), None)
+
+    async def list_by_owner(
+        self, owner_id: UUID, *, limit: int, cursor: Cursor | None
+    ) -> list[Project]:
+        return _paginate(self._alive(owner_id), cursor, limit)
+
+    async def save(self, project: Project) -> None:
+        self._projects[project.id] = project
+
+
+class InMemoryRecordingRepository(RecordingRepository):
+    def __init__(self, recordings: dict[UUID, Recording]) -> None:
+        self._recordings = recordings
+
+    def _alive(self, owner_id: UUID) -> list[Recording]:
+        return [
+            r
+            for r in self._recordings.values()
+            if r.owner_id == owner_id and r.status is not RecordingStatus.DELETED
+        ]
+
+    async def add(self, recording: Recording) -> None:
+        self._recordings[recording.id] = recording
+
+    async def get(
+        self, recording_id: UUID, owner_id: UUID, *, for_update: bool = False
+    ) -> Recording | None:
+        return next((r for r in self._alive(owner_id) if r.id == recording_id), None)
+
+    async def list_by_owner(
+        self,
+        owner_id: UUID,
+        *,
+        project_id: UUID | None,
+        status: RecordingStatus | None,
+        limit: int,
+        cursor: Cursor | None,
+    ) -> list[Recording]:
+        items = [
+            r
+            for r in self._alive(owner_id)
+            if (project_id is None or r.project_id == project_id)
+            and (status is None or r.status is status)
+        ]
+        return _paginate(items, cursor, limit)
+
+    async def save(self, recording: Recording) -> None:
+        self._recordings[recording.id] = recording
+
+
 class FakeUnitOfWork(UnitOfWork):
-    def __init__(self, users: dict[UUID, User], plans: dict[str, Plan]) -> None:
-        self.users = InMemoryUserRepository(users)
-        self.plans = InMemoryPlanRepository(plans)
-        self.committed = False
+    def __init__(self, db: FakeDb) -> None:
+        super().__init__()
+        self._db = db
+        self.users = InMemoryUserRepository(db.users)
+        self.plans = InMemoryPlanRepository(db.plans)
+        self.projects = InMemoryProjectRepository(db.projects)
+        self.recordings = InMemoryRecordingRepository(db.recordings)
 
     async def __aenter__(self) -> Self:
         return self
@@ -55,10 +156,11 @@ class FakeUnitOfWork(UnitOfWork):
         return None
 
     async def commit(self) -> None:
-        self.committed = True
+        self._db.events.extend(self.events)
+        self.events.clear()
 
     async def rollback(self) -> None:
-        return None
+        self.events.clear()
 
 
 class FakePasswordHasher(PasswordHasher):
@@ -85,3 +187,34 @@ class InMemoryRefreshTokenStore(RefreshTokenStore):
 
     async def revoke(self, jti: str) -> None:
         self.items.pop(jti, None)
+
+
+class FakeObjectStorage(ObjectStorage):
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], StoredObject] = {}
+
+    def put(self, bucket: str, key: str, size: int) -> None:
+        self.objects[(bucket, key)] = StoredObject(size=size, content_type="audio/wav")
+
+    async def ensure_buckets(self) -> None:
+        return None
+
+    async def create_upload_url(self, bucket: str, key: str, ttl_seconds: int) -> str:
+        return f"http://storage.test/{bucket}/{key}?ttl={ttl_seconds}"
+
+    async def create_internal_read_url(self, bucket: str, key: str, ttl_seconds: int) -> str:
+        return f"http://storage.internal/{bucket}/{key}"
+
+    async def stat(self, bucket: str, key: str) -> StoredObject | None:
+        return self.objects.get((bucket, key))
+
+
+class FakeMediaProbe(MediaProbe):
+    def __init__(self, duration_sec: float = 60.0, error: str | None = None) -> None:
+        self.duration_sec = duration_sec
+        self.error = error
+
+    async def probe(self, source_url: str) -> MediaInfo:
+        if self.error is not None:
+            raise InvalidMediaError(self.error)
+        return MediaInfo(duration_sec=self.duration_sec)

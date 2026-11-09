@@ -25,6 +25,9 @@ PROBLEMS: dict[str, tuple[int, str]] = {
     "RATE_LIMITED": (429, "Too many requests"),
     "INTERNAL_ERROR": (500, "Internal server error"),
     "DEPENDENCY_UNAVAILABLE": (503, "Dependency unavailable"),
+    "PROJECT_NAME_TAKEN": (409, "Project name already taken"),
+    "INVALID_MEDIA": (422, "Invalid media"),
+    "UPLOAD_MISSING": (422, "Upload missing"),
 }
 
 _HTTP_STATUS_CODES = {
