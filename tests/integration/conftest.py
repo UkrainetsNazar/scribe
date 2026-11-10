@@ -1,12 +1,15 @@
 import asyncio
+import socket
 import time
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass
 
 import httpx
 import pytest
 from alembic import command
 from asgi_lifespan import LifespanManager
 from dependency_injector import providers
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.core.container import DockerContainer
 from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
@@ -20,6 +23,39 @@ from tests.integration.helpers import alembic_config
 MINIO_IMAGE = "docker.io/pgsty/silo:RELEASE.2026-10-26T00-00-00Z"
 MINIO_USER = "scribe"
 MINIO_PASSWORD = "scribe-secret"
+RABBIT_IMAGE = "rabbitmq:3.13-management-alpine"
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+@dataclass
+class RabbitBroker:
+    url: str
+    mgmt_port: int
+    container: DockerContainer
+
+    def stop(self) -> None:
+        self.container.get_wrapped_container().stop()
+
+    def start(self) -> None:
+        self.container.get_wrapped_container().start()
+
+    def wait_ready(self, timeout: float = 90.0) -> None:
+        deadline = time.monotonic() + timeout
+        health = f"http://127.0.0.1:{self.mgmt_port}/api/health/checks/port-listener/5672"
+        while True:
+            try:
+                if httpx.get(health, auth=("scribe", "scribe"), timeout=3).status_code == 200:
+                    return
+            except httpx.HTTPError:
+                pass
+            if time.monotonic() > deadline:
+                raise RuntimeError("RabbitMQ did not become ready in time")
+            time.sleep(1)
 
 
 @pytest.fixture(scope="session")
@@ -61,9 +97,38 @@ def minio_endpoint() -> Iterator[str]:
 
 
 @pytest.fixture(scope="session")
+def rabbit() -> Iterator[RabbitBroker]:
+    # Fixed host ports: they must survive a stop/start of the container
+    amqp_port, mgmt_port = _free_port(), _free_port()
+    container = (
+        DockerContainer(RABBIT_IMAGE)
+        .with_bind_ports(5672, amqp_port)
+        .with_bind_ports(15672, mgmt_port)
+        .with_env("RABBITMQ_DEFAULT_USER", "scribe")
+        .with_env("RABBITMQ_DEFAULT_PASS", "scribe")
+    )
+    with container:
+        broker = RabbitBroker(
+            url=f"amqp://scribe:scribe@127.0.0.1:{amqp_port}/",
+            mgmt_port=mgmt_port,
+            container=container,
+        )
+        broker.wait_ready()
+        yield broker
+
+
+@pytest.fixture(scope="session")
 async def migrated_db(postgres_url: str) -> str:
+    # alembic env.py calls asyncio.run(), so run it in a separate thread
     await asyncio.to_thread(command.upgrade, alembic_config(postgres_url), "head")
     return postgres_url
+
+
+@pytest.fixture
+async def session_factory(migrated_db: str) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    engine = create_async_engine(migrated_db)
+    yield async_sessionmaker(engine, expire_on_commit=False)
+    await engine.dispose()
 
 
 @pytest.fixture

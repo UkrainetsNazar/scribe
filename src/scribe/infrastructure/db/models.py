@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from scribe.infrastructure.db.base import Base
@@ -82,3 +84,32 @@ class RecordingModel(Base):
     storage_key: Mapped[str] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OutboxEventModel(Base):
+    __tablename__ = "outbox_events"
+    __table_args__ = (
+        # The relay only scans rows that are still waiting to be published
+        Index("ix_outbox_events_unpublished", "id", postgresql_where=text("published_at IS NULL")),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True)
+    aggregate_type: Mapped[str] = mapped_column(String(50))
+    aggregate_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    event_type: Mapped[str] = mapped_column(String(100))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    headers: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InboxMessageModel(Base):
+    __tablename__ = "inbox_messages"
+
+    message_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    consumer: Mapped[str] = mapped_column(String(100), primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

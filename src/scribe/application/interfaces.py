@@ -6,6 +6,7 @@ from types import TracebackType
 from typing import Literal, Self
 from uuid import UUID
 
+from scribe.application.messaging import InboxRepository
 from scribe.application.pagination import Cursor
 from scribe.domain.events import DomainEvent
 from scribe.domain.projects import Project
@@ -81,6 +82,7 @@ class UnitOfWork(ABC):
     plans: PlanRepository
     projects: ProjectRepository
     recordings: RecordingRepository
+    inbox: InboxRepository
 
     def __init__(self) -> None:
         self.events: list[DomainEvent] = []

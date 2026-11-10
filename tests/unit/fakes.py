@@ -1,8 +1,10 @@
+import asyncio
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Self
 from uuid import UUID
 
+from scribe.application.inbox import EventHandler, InboundEvent
 from scribe.application.interfaces import (
     MediaInfo,
     MediaProbe,
@@ -16,6 +18,7 @@ from scribe.application.interfaces import (
     UnitOfWork,
     UserRepository,
 )
+from scribe.application.messaging import InboxRepository
 from scribe.application.pagination import Cursor
 from scribe.domain.errors import EmailTakenError, InvalidMediaError
 from scribe.domain.events import DomainEvent
@@ -35,6 +38,7 @@ class FakeDb:
     projects: dict[UUID, Project] = field(default_factory=dict)
     recordings: dict[UUID, Recording] = field(default_factory=dict)
     events: list[DomainEvent] = field(default_factory=list)  # committed events
+    inbox: set[tuple[UUID, str]] = field(default_factory=set)  # committed inbox keys
 
 
 def _paginate(items: list[Any], cursor: Cursor | None, limit: int) -> list[Any]:
@@ -135,6 +139,29 @@ class InMemoryRecordingRepository(RecordingRepository):
         self._recordings[recording.id] = recording
 
 
+class InMemoryInboxRepository(InboxRepository):
+    def __init__(self, committed: set[tuple[UUID, str]]) -> None:
+        self._committed = committed
+        self._pending: set[tuple[UUID, str]] = set()
+
+    async def register(self, message_id: UUID, consumer: str) -> bool:
+        key = (message_id, consumer)
+        if key in self._committed or key in self._pending:
+            return False
+        self._pending.add(key)
+        return True
+
+    async def mark_processed(self, message_id: UUID, consumer: str) -> None:
+        return None
+
+    def commit(self) -> None:
+        self._committed |= self._pending
+        self._pending.clear()
+
+    def discard(self) -> None:
+        self._pending.clear()
+
+
 class FakeUnitOfWork(UnitOfWork):
     def __init__(self, db: FakeDb) -> None:
         super().__init__()
@@ -143,6 +170,8 @@ class FakeUnitOfWork(UnitOfWork):
         self.plans = InMemoryPlanRepository(db.plans)
         self.projects = InMemoryProjectRepository(db.projects)
         self.recordings = InMemoryRecordingRepository(db.recordings)
+        self._inbox = InMemoryInboxRepository(db.inbox)
+        self.inbox = self._inbox
 
     async def __aenter__(self) -> Self:
         return self
@@ -153,14 +182,16 @@ class FakeUnitOfWork(UnitOfWork):
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        return None
+        self._inbox.discard()  # no commit() means the inbox row is rolled back
 
     async def commit(self) -> None:
         self._db.events.extend(self.events)
         self.events.clear()
+        self._inbox.commit()
 
     async def rollback(self) -> None:
         self.events.clear()
+        self._inbox.discard()
 
 
 class FakePasswordHasher(PasswordHasher):
@@ -218,3 +249,17 @@ class FakeMediaProbe(MediaProbe):
         if self.error is not None:
             raise InvalidMediaError(self.error)
         return MediaInfo(duration_sec=self.duration_sec)
+
+
+class CountingHandler(EventHandler):
+    def __init__(self, fail_times: int = 0, delay: float = 0.0) -> None:
+        self.calls = 0
+        self.fail_times = fail_times
+        self.delay = delay
+
+    async def handle(self, event: InboundEvent, uow: UnitOfWork) -> None:
+        self.calls += 1
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.calls <= self.fail_times:
+            raise RuntimeError("boom")

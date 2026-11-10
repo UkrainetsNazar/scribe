@@ -26,6 +26,8 @@ from scribe.infrastructure.db.session import create_engine, create_session_facto
 from scribe.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from scribe.infrastructure.logging_config import configure_logging
 from scribe.infrastructure.media.ffprobe import FfprobeMediaProbe
+from scribe.infrastructure.messaging.publisher import RabbitMqPublisher
+from scribe.infrastructure.messaging.relay import OutboxRelay
 from scribe.infrastructure.redis_client import create_redis
 from scribe.infrastructure.security.passwords import Argon2PasswordHasher
 from scribe.infrastructure.security.refresh_store import RedisRefreshTokenStore
@@ -67,6 +69,18 @@ class Container(containers.DeclarativeContainer):
         FfprobeMediaProbe,
         binary=settings.provided.ffprobe_bin,
         timeout_sec=settings.provided.ffprobe_timeout_sec,
+    )
+    message_publisher = providers.Singleton(
+        RabbitMqPublisher,
+        url=settings.provided.rabbitmq_url,
+        retry_delays=settings.provided.rabbitmq_retry_delays_sec,
+    )
+    outbox_relay = providers.Singleton(
+        OutboxRelay,
+        session_factory=session_factory,
+        publisher=message_publisher,
+        batch_size=settings.provided.outbox_batch_size,
+        poll_interval_sec=settings.provided.outbox_poll_interval_sec,
     )
 
     # ── Use cases: auth ──

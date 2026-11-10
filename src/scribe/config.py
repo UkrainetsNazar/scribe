@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     ffprobe_bin: str = "ffprobe"
     ffprobe_timeout_sec: float = 30.0
 
+    # Messaging and outbox relay
+    rabbitmq_retry_delays_sec: tuple[int, ...] = (5, 30, 120, 600)
+    rabbitmq_prefetch: int = 10
+    outbox_batch_size: int = 100
+    outbox_poll_interval_sec: float = 0.2
+
     # Security
     jwt_secret: SecretStr = Field(default=SecretStr("dev-only-secret-change-me-in-prod-0123456789"))
     jwt_algorithm: str = "HS256"
