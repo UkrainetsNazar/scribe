@@ -1,6 +1,8 @@
 import asyncio
+import io
 from collections.abc import Sequence
 from datetime import timedelta
+from pathlib import Path
 
 from minio import Minio
 from minio.error import S3Error
@@ -47,6 +49,48 @@ class MinioObjectStorage(ObjectStorage):
                 return None
             raise
         return StoredObject(size=info.size or 0, content_type=info.content_type)
+
+    async def upload_file(self, bucket: str, key: str, path: Path, content_type: str) -> None:
+        await asyncio.to_thread(
+            self._internal.fput_object, bucket, key, str(path), content_type=content_type
+        )
+
+    async def download_file(self, bucket: str, key: str, path: Path) -> None:
+        await asyncio.to_thread(self._download_file, bucket, key, path)
+
+    def _download_file(self, bucket: str, key: str, path: Path) -> None:
+        try:
+            self._internal.fget_object(bucket, key, str(path))
+        except S3Error as exc:
+            if exc.code in _MISSING_CODES:
+                raise FileNotFoundError(key) from exc
+            raise
+
+    async def put_bytes(self, bucket: str, key: str, data: bytes, content_type: str) -> None:
+        await asyncio.to_thread(
+            self._internal.put_object,
+            bucket,
+            key,
+            io.BytesIO(data),
+            len(data),
+            content_type=content_type,
+        )
+
+    async def get_bytes(self, bucket: str, key: str) -> bytes | None:
+        return await asyncio.to_thread(self._get_bytes, bucket, key)
+
+    def _get_bytes(self, bucket: str, key: str) -> bytes | None:
+        try:
+            response = self._internal.get_object(bucket, key)
+        except S3Error as exc:
+            if exc.code in _MISSING_CODES:
+                return None
+            raise
+        try:
+            return bytes(response.read())
+        finally:
+            response.close()
+            response.release_conn()
 
 
 def create_object_storage(settings: Settings) -> MinioObjectStorage:

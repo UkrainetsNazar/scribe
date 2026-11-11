@@ -25,6 +25,7 @@ async def _ensure_buckets(container: Container) -> None:
 
 def create_app(container: Container | None = None) -> FastAPI:
     container = container or Container()
+    container.wire()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:

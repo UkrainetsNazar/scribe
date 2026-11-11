@@ -22,6 +22,7 @@ def _to_domain(m: RecordingModel) -> Recording:
         storage_key=m.storage_key,
         status=RecordingStatus(m.status),
         duration_sec=m.duration_sec,
+        run=m.run,
         created_at=m.created_at,
         updated_at=m.updated_at,
     )
@@ -45,6 +46,7 @@ class SqlAlchemyRecordingRepository(RecordingRepository):
                 language=recording.language,
                 status=recording.status.value,
                 storage_key=recording.storage_key,
+                run=recording.run,
                 created_at=recording.created_at,
                 updated_at=recording.updated_at,
             )
@@ -104,6 +106,7 @@ class SqlAlchemyRecordingRepository(RecordingRepository):
             .values(
                 status=recording.status.value,
                 duration_sec=recording.duration_sec,
+                run=recording.run,
                 language=recording.language,
                 updated_at=recording.updated_at,
             )

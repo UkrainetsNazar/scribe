@@ -11,6 +11,8 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
+    UniqueConstraint,
     Uuid,
     func,
     text,
@@ -82,6 +84,7 @@ class RecordingModel(Base):
     language: Mapped[str] = mapped_column(String(10))
     status: Mapped[str] = mapped_column(String(20))
     storage_key: Mapped[str] = mapped_column(String(512))
+    run: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -113,3 +116,26 @@ class InboxMessageModel(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ProcessingStageModel(Base):
+    __tablename__ = "processing_stages"
+    __table_args__ = (UniqueConstraint("recording_id", "name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    recording_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("recordings.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(20))
+    progress: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class UsageModel(Base):
+    __tablename__ = "usage"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    period: Mapped[str] = mapped_column(String(7), primary_key=True)  # YYYY-MM
+    minutes_used: Mapped[int] = mapped_column(Integer, server_default=text("0"))

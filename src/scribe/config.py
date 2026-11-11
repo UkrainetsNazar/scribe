@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     outbox_batch_size: int = 100
     outbox_poll_interval_sec: float = 0.2
 
+    # Pipeline
+    transcriber: Literal["whisper", "stub"] = "whisper"
+    whisper_model: str = "small"
+    whisper_device: str = "auto"
+    whisper_compute_type: str = "int8"
+    whisper_beam_size: int = 5
+    ffmpeg_bin: str = "ffmpeg"
+    ffmpeg_timeout_sec: float = 3600.0
+    chunk_seconds: int = 600
+    pipeline_max_retries: int = 5
+
     # Security
     jwt_secret: SecretStr = Field(default=SecretStr("dev-only-secret-change-me-in-prod-0123456789"))
     jwt_algorithm: str = "HS256"

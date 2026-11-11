@@ -94,6 +94,7 @@ class Recording:
     storage_key: str
     status: RecordingStatus = RecordingStatus.CREATED
     duration_sec: float | None = None
+    run: int = 0
     created_at: datetime = field(default_factory=_now)
     updated_at: datetime = field(default_factory=_now)
     events: list[DomainEvent] = field(default_factory=list, init=False, repr=False, compare=False)
@@ -189,11 +190,19 @@ class Recording:
         )
 
     def _request_processing(self) -> None:
+        self.run += 1  # a new processing run: tasks of earlier runs become stale
         self.events.append(
             RecordingProcessingRequested(
-                recording_id=self.id, owner_id=self.owner_id, storage_key=self.storage_key
+                recording_id=self.id,
+                owner_id=self.owner_id,
+                storage_key=self.storage_key,
+                run=self.run,
             )
         )
+
+    def set_language(self, language: str) -> None:
+        if self.language == "auto":
+            self.language = language
 
     def pull_events(self) -> list[DomainEvent]:
         events, self.events = self.events, []

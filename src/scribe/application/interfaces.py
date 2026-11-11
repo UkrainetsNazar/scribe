@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from types import TracebackType
 from typing import Literal, Self
 from uuid import UUID
@@ -9,6 +10,7 @@ from uuid import UUID
 from scribe.application.messaging import InboxRepository
 from scribe.application.pagination import Cursor
 from scribe.domain.events import DomainEvent
+from scribe.domain.pipeline import ProcessingStage, StageName
 from scribe.domain.projects import Project
 from scribe.domain.recordings import Recording, RecordingStatus
 from scribe.domain.users import Plan, User
@@ -77,12 +79,42 @@ class RecordingRepository(ABC):
     async def save(self, recording: Recording) -> None: ...
 
 
+class StageRepository(ABC):
+    @abstractmethod
+    async def reset_incomplete(self, recording_id: UUID) -> None:
+        """Creates missing stages and sets every non-completed stage back to pending."""
+
+    @abstractmethod
+    async def get(self, recording_id: UUID, name: StageName) -> ProcessingStage | None: ...
+
+    @abstractmethod
+    async def list_for_recording(self, recording_id: UUID) -> list[ProcessingStage]:
+        """In pipeline order."""
+
+    @abstractmethod
+    async def save(self, stage: ProcessingStage) -> None: ...
+
+
+class UsageRepository(ABC):
+    @abstractmethod
+    async def lock_minutes(self, user_id: UUID, period: str) -> int:
+        """Creates the row if needed and locks it until the transaction ends."""
+
+    @abstractmethod
+    async def add_minutes(self, user_id: UUID, period: str, minutes: int) -> None: ...
+
+    @abstractmethod
+    async def get_minutes(self, user_id: UUID, period: str) -> int: ...
+
+
 class UnitOfWork(ABC):
     users: UserRepository
     plans: PlanRepository
     projects: ProjectRepository
     recordings: RecordingRepository
     inbox: InboxRepository
+    stages: StageRepository
+    usage: UsageRepository
 
     def __init__(self) -> None:
         self.events: list[DomainEvent] = []
@@ -196,6 +228,20 @@ class ObjectStorage(ABC):
 
     @abstractmethod
     async def stat(self, bucket: str, key: str) -> StoredObject | None:
+        """None if the object does not exist."""
+
+    @abstractmethod
+    async def upload_file(self, bucket: str, key: str, path: Path, content_type: str) -> None: ...
+
+    @abstractmethod
+    async def download_file(self, bucket: str, key: str, path: Path) -> None:
+        """Raises FileNotFoundError if the object does not exist."""
+
+    @abstractmethod
+    async def put_bytes(self, bucket: str, key: str, data: bytes, content_type: str) -> None: ...
+
+    @abstractmethod
+    async def get_bytes(self, bucket: str, key: str) -> bytes | None:
         """None if the object does not exist."""
 
 

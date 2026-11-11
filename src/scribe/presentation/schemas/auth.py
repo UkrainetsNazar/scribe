@@ -62,12 +62,17 @@ class UserResponse(BaseModel):
         return cls(id=user.id, email=user.email, plan=user.plan.name, created_at=user.created_at)
 
 
-class MeResponse(UserResponse):
+class MeResponse(BaseModel):
+    id: UUID
+    email: str
+    plan: str
+    created_at: datetime
     monthly_minutes: int
     max_file_mb: int
+    minutes_used: int
 
     @classmethod
-    def from_domain(cls, user: User) -> Self:
+    def build(cls, user: User, minutes_used: int) -> Self:
         return cls(
             id=user.id,
             email=user.email,
@@ -75,4 +80,5 @@ class MeResponse(UserResponse):
             created_at=user.created_at,
             monthly_minutes=user.plan.monthly_minutes,
             max_file_mb=user.plan.max_file_mb,
+            minutes_used=minutes_used,
         )

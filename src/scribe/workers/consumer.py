@@ -11,25 +11,25 @@ from scribe.workers.common import connect_with_retry, install_signal_handlers
 
 log = structlog.get_logger()
 
-HANDLERS: list[tuple[QueueSpec, EventHandler]] = [(PIPELINE_START, PipelineStartHandler())]
-
 
 async def main() -> None:
     container = Container()
     container.init_resources()
     settings = container.settings()
 
+    # Queue -> handler. New consumers (WebSocket progress, webhooks) are added here.
+    handlers: list[tuple[QueueSpec, EventHandler]] = [
+        (PIPELINE_START, PipelineStartHandler(container.pipeline_dispatcher())),
+    ]
     consumers = [
         RabbitMqConsumer(
             settings.rabbitmq_url,
             spec,
-            InboxGuard(
-                container.uow, spec.name, handler
-            ),  # container.uow creates a new UoW per call
+            InboxGuard(container.uow, spec.name, handler),
             settings.rabbitmq_retry_delays_sec,
             settings.rabbitmq_prefetch,
         )
-        for spec, handler in HANDLERS
+        for spec, handler in handlers
     ]
     for consumer in consumers:
         await connect_with_retry(consumer.start, f"consumer:{consumer.name}")

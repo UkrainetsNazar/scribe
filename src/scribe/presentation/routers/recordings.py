@@ -5,11 +5,13 @@ from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from scribe.application.use_cases.recordings import (
+    CancelRecording,
     CompleteUpload,
     CreateRecording,
     DeleteRecording,
     GetRecording,
     ListRecordings,
+    RetryRecording,
 )
 from scribe.container import Container
 from scribe.domain.recordings import RecordingStatus
@@ -68,7 +70,7 @@ async def get_recording(
     user: User = Depends(get_current_user),
     use_case: GetRecording = Depends(Provide[Container.get_recording]),
 ) -> RecordingResponse:
-    return RecordingResponse.from_domain(await use_case.execute(user.id, recording_id))
+    return RecordingResponse.from_view(await use_case.execute(user.id, recording_id))
 
 
 @router.post("/{recording_id}/complete-upload", status_code=status.HTTP_202_ACCEPTED)
@@ -77,8 +79,34 @@ async def complete_upload(
     recording_id: UUID,
     user: User = Depends(get_current_user),
     use_case: CompleteUpload = Depends(Provide[Container.complete_upload]),
+    get_use_case: GetRecording = Depends(Provide[Container.get_recording]),
 ) -> RecordingResponse:
-    return RecordingResponse.from_domain(await use_case.execute(user.id, recording_id))
+    await use_case.execute(user.id, recording_id)
+    return RecordingResponse.from_view(await get_use_case.execute(user.id, recording_id))
+
+
+@router.post("/{recording_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+@inject
+async def retry_recording(
+    recording_id: UUID,
+    user: User = Depends(get_current_user),
+    use_case: RetryRecording = Depends(Provide[Container.retry_recording]),
+    get_use_case: GetRecording = Depends(Provide[Container.get_recording]),
+) -> RecordingResponse:
+    await use_case.execute(user.id, recording_id)
+    return RecordingResponse.from_view(await get_use_case.execute(user.id, recording_id))
+
+
+@router.post("/{recording_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+@inject
+async def cancel_recording(
+    recording_id: UUID,
+    user: User = Depends(get_current_user),
+    use_case: CancelRecording = Depends(Provide[Container.cancel_recording]),
+    get_use_case: GetRecording = Depends(Provide[Container.get_recording]),
+) -> RecordingResponse:
+    await use_case.execute(user.id, recording_id)
+    return RecordingResponse.from_view(await get_use_case.execute(user.id, recording_id))
 
 
 @router.delete("/{recording_id}", status_code=status.HTTP_204_NO_CONTENT)

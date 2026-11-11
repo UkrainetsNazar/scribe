@@ -10,11 +10,15 @@ from scribe.application.interfaces import (
 )
 from scribe.application.pagination import Cursor, Page, build_page, decode_cursor
 from scribe.domain.errors import (
+    AppError,
     InvalidMediaError,
     InvalidStateError,
     NotFoundError,
+    QuotaExceededError,
     UploadMissingError,
 )
+from scribe.domain.pipeline import ProcessingStage
+from scribe.domain.quota import ensure_within_quota, usage_period
 from scribe.domain.recordings import MAX_DURATION_SEC, Recording, RecordingStatus
 from scribe.domain.users import User
 
@@ -24,6 +28,12 @@ class CreatedRecording:
     recording: Recording
     upload_url: str
     expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RecordingView:
+    recording: Recording
+    stages: list[ProcessingStage]
 
 
 class CreateRecording:
@@ -74,6 +84,14 @@ class CreateRecording:
 
 
 class CompleteUpload:
+    """Validates the uploaded file and moves the recording to `processing`.
+
+    Missing file: 422 and the state stays `created`, so the client can upload and retry.
+    Invalid file, too long, or quota exceeded: the recording becomes `failed` and the call is 422.
+    Repeated call for a recording that is already processing: returns it unchanged.
+    The minutes are charged once, when processing starts; retry does not charge again.
+    """
+
     READ_URL_TTL_SECONDS = 300
 
     def __init__(
@@ -90,6 +108,7 @@ class CompleteUpload:
 
     async def execute(self, owner_id: UUID, recording_id: UUID) -> Recording:
         async with self._uow_factory() as uow:
+            # Row lock: concurrent calls are serialized, the second one sees `processing`
             recording = await uow.recordings.get(recording_id, owner_id, for_update=True)
             if recording is None:
                 raise NotFoundError("Recording not found")
@@ -101,11 +120,16 @@ class CompleteUpload:
             stored = await self._storage.stat(self._bucket, recording.storage_key)
             if stored is None:
                 raise UploadMissingError
+            user = await uow.users.get_by_id(owner_id)
+            if user is None:
+                raise NotFoundError("User not found")
 
             recording.mark_uploaded()
             if stored.size != recording.size_bytes:
                 raise await self._fail(
-                    uow, recording, "Uploaded file size does not match the declared size"
+                    uow,
+                    recording,
+                    InvalidMediaError("Uploaded file size does not match the declared size"),
                 )
 
             read_url = await self._storage.create_internal_read_url(
@@ -114,35 +138,90 @@ class CompleteUpload:
             try:
                 media = await self._probe.probe(read_url)
             except InvalidMediaError as exc:
-                raise await self._fail(uow, recording, exc.message) from exc
+                raise await self._fail(uow, recording, exc) from exc
             if media.duration_sec > MAX_DURATION_SEC:
-                raise await self._fail(uow, recording, "Recording is longer than 4 hours")
+                raise await self._fail(
+                    uow, recording, InvalidMediaError("Recording is longer than 4 hours")
+                )
+
+            # The usage row is locked, so concurrent uploads of one user cannot overshoot the quota
+            period = usage_period(datetime.now(UTC))
+            used = await uow.usage.lock_minutes(owner_id, period)
+            try:
+                minutes = ensure_within_quota(user.plan, used, media.duration_sec)
+            except QuotaExceededError as exc:
+                raise await self._fail(uow, recording, exc) from exc
 
             recording.start_processing(media.duration_sec)
+            await uow.usage.add_minutes(owner_id, period, minutes)
+            await uow.stages.reset_incomplete(recording.id)
             await uow.recordings.save(recording)
             uow.add_events(recording.pull_events())
             await uow.commit()
         return recording
 
     @staticmethod
-    async def _fail(uow: UnitOfWork, recording: Recording, reason: str) -> InvalidMediaError:
-        recording.fail(reason)
+    async def _fail(uow: UnitOfWork, recording: Recording, error: AppError) -> AppError:
+        """Persists the failure (the commit must happen before the error is raised)."""
+        recording.fail(error.message)
         await uow.recordings.save(recording)
         uow.add_events(recording.pull_events())
         await uow.commit()
-        return InvalidMediaError(reason)
+        return error
+
+
+class RetryRecording:
+    """failed/cancelled -> processing. Completed stages are kept, the rest run again."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    async def execute(self, owner_id: UUID, recording_id: UUID) -> Recording:
+        async with self._uow_factory() as uow:
+            recording = await uow.recordings.get(recording_id, owner_id, for_update=True)
+            if recording is None:
+                raise NotFoundError("Recording not found")
+            if recording.status is RecordingStatus.PROCESSING:
+                return recording  # idempotent: already running
+            recording.retry()  # 409 unless failed or cancelled
+            await uow.stages.reset_incomplete(recording.id)
+            await uow.recordings.save(recording)
+            uow.add_events(recording.pull_events())
+            await uow.commit()
+        return recording
+
+
+class CancelRecording:
+    """processing -> cancelled. Running stages notice it at their next progress report."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    async def execute(self, owner_id: UUID, recording_id: UUID) -> Recording:
+        async with self._uow_factory() as uow:
+            recording = await uow.recordings.get(recording_id, owner_id, for_update=True)
+            if recording is None:
+                raise NotFoundError("Recording not found")
+            if recording.status is RecordingStatus.CANCELLED:
+                return recording  # idempotent
+            recording.cancel()  # 409 unless processing
+            await uow.recordings.save(recording)
+            uow.add_events(recording.pull_events())
+            await uow.commit()
+        return recording
 
 
 class GetRecording:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
 
-    async def execute(self, owner_id: UUID, recording_id: UUID) -> Recording:
+    async def execute(self, owner_id: UUID, recording_id: UUID) -> RecordingView:
         async with self._uow_factory() as uow:
             recording = await uow.recordings.get(recording_id, owner_id)
-        if recording is None:
-            raise NotFoundError("Recording not found")
-        return recording
+            if recording is None:
+                raise NotFoundError("Recording not found")
+            stages = await uow.stages.list_for_recording(recording.id)
+        return RecordingView(recording=recording, stages=stages)
 
 
 class ListRecordings:
@@ -166,6 +245,9 @@ class ListRecordings:
 
 
 class DeleteRecording:
+    """Marks the recording as deleted. Files and Mongo data are removed on the
+    RecordingDeleted event."""
+
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
 
@@ -174,7 +256,7 @@ class DeleteRecording:
             recording = await uow.recordings.get(recording_id, owner_id, for_update=True)
             if recording is None:
                 raise NotFoundError("Recording not found")
-            recording.delete()
+            recording.delete()  # 409 for states that do not allow it
             await uow.recordings.save(recording)
             uow.add_events(recording.pull_events())
             await uow.commit()

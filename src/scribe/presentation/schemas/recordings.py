@@ -1,10 +1,12 @@
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Annotated, Literal, Self
+from typing import Annotated, Self
 from uuid import UUID
 
 from pydantic import BaseModel, Field, StringConstraints
 
-from scribe.application.use_cases.recordings import CreatedRecording
+from scribe.application.use_cases.recordings import CreatedRecording, RecordingView
+from scribe.domain.pipeline import ProcessingStage, StageName, StageStatus
 from scribe.domain.recordings import Recording, RecordingStatus
 
 Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
@@ -20,17 +22,14 @@ class RecordingCreateRequest(BaseModel):
 
 
 class StageResponse(BaseModel):
-    name: Literal[
-        "extract_audio",
-        "normalize_and_chunk",
-        "transcribe",
-        "build_subtitles",
-        "summarize",
-        "index",
-    ]
-    status: Literal["pending", "running", "completed", "failed"]
+    name: StageName
+    status: StageStatus
     progress: int = Field(ge=0, le=100)
     error: str | None = None
+
+    @classmethod
+    def from_domain(cls, stage: ProcessingStage) -> Self:
+        return cls(name=stage.name, status=stage.status, progress=stage.progress, error=stage.error)
 
 
 class RecordingResponse(BaseModel):
@@ -45,7 +44,7 @@ class RecordingResponse(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_domain(cls, recording: Recording) -> Self:
+    def from_domain(cls, recording: Recording, stages: Sequence[ProcessingStage] = ()) -> Self:
         return cls(
             id=recording.id,
             project_id=recording.project_id,
@@ -53,9 +52,14 @@ class RecordingResponse(BaseModel):
             status=recording.status,
             duration_sec=recording.duration_sec,
             language=recording.language,
+            stages=[StageResponse.from_domain(s) for s in stages],
             created_at=recording.created_at,
             updated_at=recording.updated_at,
         )
+
+    @classmethod
+    def from_view(cls, view: RecordingView) -> Self:
+        return cls.from_domain(view.recording, view.stages)
 
 
 class RecordingCreatedResponse(BaseModel):

@@ -74,3 +74,8 @@ class ProjectNameTakenError(AppError):
 class DependencyUnavailableError(AppError):
     code = "DEPENDENCY_UNAVAILABLE"
     default_message = "A required dependency is unavailable"
+
+
+class QuotaExceededError(AppError):
+    code = "QUOTA_EXCEEDED"
+    default_message = "Monthly processing quota exceeded"

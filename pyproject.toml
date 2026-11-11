@@ -82,7 +82,7 @@ plugins = ["pydantic.mypy"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["dependency_injector.*", "testcontainers.*", "minio.*", "celery.*"]
+module = ["dependency_injector.*", "testcontainers.*", "minio.*", "celery.*", "kombu.*", "faster_whisper.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

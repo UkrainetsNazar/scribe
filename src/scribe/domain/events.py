@@ -46,6 +46,7 @@ class RecordingProcessingRequested(RecordingEvent):
     event_type: ClassVar[str] = "recording.processing_requested"
 
     storage_key: str
+    run: int = 1  # the aggregate always sets it explicitly
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

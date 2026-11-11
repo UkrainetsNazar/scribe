@@ -10,6 +10,10 @@ from scribe.infrastructure.db.messaging_repositories import (
     SqlAlchemyInboxRepository,
     SqlAlchemyOutboxRepository,
 )
+from scribe.infrastructure.db.pipeline_repositories import (
+    SqlAlchemyStageRepository,
+    SqlAlchemyUsageRepository,
+)
 from scribe.infrastructure.db.project_repositories import SqlAlchemyProjectRepository
 from scribe.infrastructure.db.recording_repositories import SqlAlchemyRecordingRepository
 from scribe.infrastructure.db.repositories import (
@@ -43,6 +47,8 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self.recordings = SqlAlchemyRecordingRepository(self._session)
         self.inbox = SqlAlchemyInboxRepository(self._session)
         self.outbox = SqlAlchemyOutboxRepository(self._session)
+        self.stages = SqlAlchemyStageRepository(self._session)
+        self.usage = SqlAlchemyUsageRepository(self._session)
         return self
 
     async def __aexit__(
