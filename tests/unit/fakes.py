@@ -24,6 +24,7 @@ from scribe.application.interfaces import (
 from scribe.application.messaging import InboxRepository
 from scribe.application.pagination import Cursor
 from scribe.application.pipeline_ports import PipelineDispatcher, Transcriber, TranscriptIndex
+from scribe.application.progress import Message, ProgressPublisher
 from scribe.domain.errors import EmailTakenError, InvalidMediaError
 from scribe.domain.events import DomainEvent
 from scribe.domain.pipeline import PIPELINE_STAGES, ProcessingStage, StageName, StageStatus
@@ -378,3 +379,15 @@ class FakeDispatcher(PipelineDispatcher):
 
     async def dispatch(self, recording_id: UUID, owner_id: UUID, run: int) -> None:
         self.dispatched.append((recording_id, owner_id, run))
+
+
+class FakeProgressPublisher(ProgressPublisher):
+    def __init__(self) -> None:
+        self.states: list[tuple[UUID, Message]] = []
+        self.transient: list[tuple[UUID, Message]] = []
+
+    async def publish_state(self, recording_id: UUID, message: Message) -> None:
+        self.states.append((recording_id, message))
+
+    async def publish_transient(self, recording_id: UUID, message: Message) -> None:
+        self.transient.append((recording_id, message))

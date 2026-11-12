@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import shutil
 import uuid
 from collections.abc import Iterator
@@ -9,6 +10,7 @@ import httpx
 import pytest
 from minio import Minio
 from pymongo import MongoClient
+from redis import Redis as SyncRedis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -31,11 +33,16 @@ SOURCE_NAME = "standup.wav"  # filename used by _recording_with_upload
 
 @pytest.fixture
 def pipeline_env(
-    monkeypatch: pytest.MonkeyPatch, migrated_db: str, minio_endpoint: str, mongo_url: str
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
+    minio_endpoint: str,
+    mongo_url: str,
+    redis_url: str,
 ) -> Iterator[None]:
     """Runs Celery tasks in-process (eager) against the test containers."""
     env = {
         "DATABASE_URL": migrated_db,
+        "REDIS_URL": redis_url,
         "MONGO_URL": mongo_url,
         "MONGO_DB": MONGO_DB,
         "MINIO_ENDPOINT": minio_endpoint,
@@ -82,7 +89,11 @@ async def _get(
 
 @requires_ffmpeg
 async def test_full_pipeline_completes(
-    api_client: httpx.AsyncClient, pipeline_env: None, minio_endpoint: str, mongo_url: str
+    api_client: httpx.AsyncClient,
+    pipeline_env: None,
+    minio_endpoint: str,
+    mongo_url: str,
+    redis_url: str,
 ) -> None:
     headers = await auth_headers(api_client)
     owner_id = await _owner_id(api_client, headers)
@@ -121,6 +132,19 @@ async def test_full_pipeline_completes(
     total, found = await asyncio.to_thread(mongo_counts)
     assert total >= 1
     assert found == total  # the text index finds every segment
+
+    def stored_state() -> dict[str, object]:
+        with SyncRedis.from_url(redis_url, decode_responses=True) as client:
+            raw = client.get(f"progress:{recording_id}")
+        return dict(json.loads(raw)) if raw else {}
+
+    state = await asyncio.to_thread(stored_state)
+    assert (state["type"], state["stage"], state["percent"], state["run"]) == (
+        "progress",
+        "index",
+        100,
+        1,
+    )
 
 
 @requires_ffmpeg

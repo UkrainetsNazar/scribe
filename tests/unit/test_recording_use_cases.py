@@ -297,3 +297,21 @@ async def test_retry_and_cancel_reject_wrong_states(
         await RetryRecording(uow_factory).execute(user.id, fresh.id)
     with pytest.raises(InvalidStateError):
         await CancelRecording(uow_factory).execute(user.id, fresh.id)
+
+
+async def test_retry_is_rejected_after_a_rejected_upload(
+    create: CreateRecording,
+    complete: CompleteUpload,
+    storage: FakeObjectStorage,
+    uow_factory: UnitOfWorkFactory,
+    user: User,
+    project: Project,
+    db: FakeDb,
+) -> None:
+    db.usage[(user.id, usage_period(datetime.now(UTC)))] = 300
+    recording = await _uploaded(create, storage, user, project)
+    with pytest.raises(QuotaExceededError):
+        await complete.execute(user.id, recording.id)
+
+    with pytest.raises(InvalidStateError):  # retry must not bypass the quota check
+        await RetryRecording(uow_factory).execute(user.id, recording.id)

@@ -183,6 +183,10 @@ class RetryRecording:
                 raise NotFoundError("Recording not found")
             if recording.status is RecordingStatus.PROCESSING:
                 return recording  # idempotent: already running
+            if recording.status is RecordingStatus.FAILED and recording.duration_sec is None:
+                # Rejected at complete-upload (invalid file, too long, quota): a retry would
+                # skip those checks, so the client has to create a new recording instead
+                raise InvalidStateError("The upload was rejected; create a new recording")
             recording.retry()  # 409 unless failed or cancelled
             await uow.stages.reset_incomplete(recording.id)
             await uow.recordings.save(recording)

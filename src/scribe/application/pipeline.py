@@ -6,6 +6,7 @@ from typing import TypeGuard
 from uuid import UUID
 
 from scribe.application.interfaces import UnitOfWorkFactory
+from scribe.application.progress import NullProgressPublisher, ProgressPublisher, progress_message
 from scribe.domain.pipeline import PIPELINE_STAGES, PermanentStageError, StageName, StageStatus
 from scribe.domain.recordings import Recording, RecordingStatus
 
@@ -51,12 +52,18 @@ class StageRunner:
 
     Handlers run outside any transaction (they can take minutes); state changes happen in
     short transactions before and after. Every stage is idempotent, so a repeated execution
-    (redelivery after a worker crash) is safe.
+    (redelivery after a worker crash) is safe. Progress is published after each commit.
     """
 
-    def __init__(self, uow_factory: UnitOfWorkFactory, handlers: Sequence[StageHandler]) -> None:
+    def __init__(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        handlers: Sequence[StageHandler],
+        events: ProgressPublisher | None = None,
+    ) -> None:
         self._uow_factory = uow_factory
         self._handlers = {handler.name: handler for handler in handlers}
+        self._events = events or NullProgressPublisher()
 
     async def execute(
         self, recording_id: UUID, owner_id: UUID, run: int, stage_name: StageName
@@ -77,6 +84,7 @@ class StageRunner:
             stage.start()
             await uow.stages.save(stage)
             await uow.commit()
+        await self._emit_progress(recording_id, run, stage_name, 0)
 
         async def report(percent: int) -> None:
             await self._report_progress(recording_id, owner_id, run, stage_name, percent)
@@ -99,11 +107,18 @@ class StageRunner:
             if stage is not None:
                 stage.fail(error)
                 await uow.stages.save(stage)
-            recording.fail(f"{stage_name.value}: {error}"[:500])
+            recording.fail(error[:500], stage=stage_name.value)
             await uow.recordings.save(recording)
             uow.add_events(recording.pull_events())
             await uow.commit()
         return True
+
+    async def _emit_progress(
+        self, recording_id: UUID, run: int, stage_name: StageName, percent: int
+    ) -> None:
+        await self._events.publish_state(
+            recording_id, progress_message(recording_id, run, stage_name, percent)
+        )
 
     async def _report_progress(
         self, recording_id: UUID, owner_id: UUID, run: int, stage_name: StageName, percent: int
@@ -118,6 +133,7 @@ class StageRunner:
             stage.set_progress(percent)
             await uow.stages.save(stage)
             await uow.commit()
+        await self._emit_progress(recording_id, run, stage_name, percent)
 
     async def _finish(
         self,
@@ -148,4 +164,5 @@ class StageRunner:
             await uow.recordings.save(recording)
             uow.add_events(recording.pull_events())
             await uow.commit()
+        await self._emit_progress(recording_id, run, stage_name, 100)
         return StageOutcome.COMPLETED

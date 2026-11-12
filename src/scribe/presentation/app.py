@@ -8,7 +8,7 @@ from tenacity import AsyncRetrying, stop_after_attempt, wait_fixed
 from scribe.container import Container
 from scribe.presentation.errors import register_exception_handlers
 from scribe.presentation.middleware import TraceIdMiddleware
-from scribe.presentation.routers import auth, health, projects, recordings, users
+from scribe.presentation.routers import auth, health, projects, recordings, users, ws
 
 log = structlog.get_logger()
 
@@ -48,6 +48,7 @@ def create_app(container: Container | None = None) -> FastAPI:
     register_exception_handlers(app)
 
     app.include_router(health.router)
+    app.include_router(ws.router)
     for router in (auth.router, users.router, projects.router, recordings.router):
         app.include_router(router, prefix=API_PREFIX)
     return app

@@ -21,6 +21,12 @@ def next_stage(stage: StageName) -> StageName | None:
     return PIPELINE_STAGES[position] if position < len(PIPELINE_STAGES) else None
 
 
+def overall_percent(stage: StageName, percent: int) -> int:
+    """Progress of the whole pipeline; every stage weighs the same."""
+    position = PIPELINE_STAGES.index(stage)
+    return round((position * 100 + max(0, min(100, percent))) / len(PIPELINE_STAGES))
+
+
 class StageStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"

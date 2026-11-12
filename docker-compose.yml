@@ -94,6 +94,7 @@ services:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
     
   worker:
     build:
@@ -114,6 +115,7 @@ services:
       rabbitmq: { condition: service_healthy }
       minio: { condition: service_started }
       migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
 
   api:
     build: .

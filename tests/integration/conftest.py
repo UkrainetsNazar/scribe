@@ -133,10 +133,8 @@ async def session_factory(migrated_db: str) -> AsyncIterator[async_sessionmaker[
 
 
 @pytest.fixture
-async def api_client(
-    migrated_db: str, redis_url: str, minio_endpoint: str
-) -> AsyncIterator[httpx.AsyncClient]:
-    settings = Settings(
+def app_settings(migrated_db: str, redis_url: str, minio_endpoint: str) -> Settings:
+    return Settings(
         database_url=migrated_db,
         redis_url=redis_url,
         log_json=False,
@@ -145,8 +143,12 @@ async def api_client(
         minio_access_key=MINIO_USER,
         minio_secret_key=MINIO_PASSWORD,  # type: ignore[arg-type]
     )
+
+
+@pytest.fixture
+async def api_client(app_settings: Settings) -> AsyncIterator[httpx.AsyncClient]:
     container = Container()
-    container.settings.override(providers.Object(settings))
+    container.settings.override(providers.Object(app_settings))
     app = create_app(container)
     async with LifespanManager(app):
         transport = httpx.ASGITransport(app=app)

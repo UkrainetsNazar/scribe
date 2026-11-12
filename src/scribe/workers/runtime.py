@@ -14,5 +14,6 @@ async def worker_container() -> AsyncGenerator[Container]:
         yield container
     finally:
         await container.engine().dispose()
+        await container.redis().aclose()
         await container.mongo().close()
         container.shutdown_resources()

@@ -12,6 +12,7 @@ from scribe.application.pipeline_ports import (
     Transcriber,
     TranscriptIndex,
 )
+from scribe.application.progress import NullProgressPublisher, ProgressPublisher, segment_message
 from scribe.application.wav import wav_duration
 from scribe.domain.pipeline import (
     CHUNK_MANIFEST,
@@ -140,10 +141,15 @@ class TranscribeHandler(_ArtifactHandler):
     name = StageName.TRANSCRIBE
 
     def __init__(
-        self, storage: ObjectStorage, transcriber: Transcriber, artifacts_bucket: str
+        self,
+        storage: ObjectStorage,
+        transcriber: Transcriber,
+        artifacts_bucket: str,
+        events: ProgressPublisher | None = None,
     ) -> None:
         super().__init__(storage, artifacts_bucket)
         self._transcriber = transcriber
+        self._events = events or NullProgressPublisher()
 
     async def execute(self, ctx: StageContext) -> StageResult | None:
         recording = ctx.recording
@@ -174,8 +180,13 @@ class TranscribeHandler(_ArtifactHandler):
             language = language or transcription.language
             model = transcription.model
             offset = float(chunk["start"])
-            segments.extend(s.shifted(offset) for s in transcription.segments if s.text.strip())
-            await ctx.progress(int((position + 1) / len(chunks) * 100))
+            shifted = [s.shifted(offset) for s in transcription.segments if s.text.strip()]
+            segments.extend(shifted)
+            await ctx.progress(int((position + 1) / len(chunks) * 100))  # raises if stale
+            for segment in shifted:  # partial results for live viewers
+                await self._events.publish_transient(
+                    recording.id, segment_message(recording.id, recording.run, segment)
+                )
 
         detected = language or "en"
         merged = Transcription(language=detected, model=model, segments=segments)

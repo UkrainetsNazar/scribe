@@ -15,7 +15,7 @@ from scribe.application.pipeline import (
 from scribe.domain.events import RecordingCompleted, RecordingFailed
 from scribe.domain.pipeline import PIPELINE_STAGES, StageName, StageStatus
 from scribe.domain.recordings import Recording, RecordingStatus
-from tests.unit.fakes import FakeDb, FakeDispatcher, FakeUnitOfWork
+from tests.unit.fakes import FakeDb, FakeDispatcher, FakeProgressPublisher, FakeUnitOfWork
 from tests.unit.test_domain_recording import make_recording
 
 
@@ -164,3 +164,21 @@ async def test_pipeline_start_handler() -> None:
     broken = InboundEvent(event_id=UUID(int=4), event_type="x", payload={}, headers={})
     with pytest.raises(PermanentHandlerError):
         await handler.handle(broken, uow)
+
+
+async def test_runner_publishes_progress_for_every_stage(
+    db: FakeDb, uow_factory: UnitOfWorkFactory
+) -> None:
+    events = FakeProgressPublisher()
+    runner = StageRunner(uow_factory, [FakeHandler(name) for name in PIPELINE_STAGES], events)
+    recording = await _processing(db, uow_factory)
+
+    for name in PIPELINE_STAGES:
+        await runner.execute(recording.id, recording.owner_id, 1, name)
+
+    messages = [message for _, message in events.states]
+    assert [(m["stage"], m["percent"]) for m in messages] == [
+        (name.value, percent) for name in PIPELINE_STAGES for percent in (0, 100)
+    ]
+    assert messages[-1]["overall"] == 100
+    assert all(m["run"] == 1 and m["type"] == "progress" for m in messages)

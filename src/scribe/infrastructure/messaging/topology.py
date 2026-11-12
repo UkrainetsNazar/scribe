@@ -16,7 +16,16 @@ class QueueSpec:
 
 
 PIPELINE_START = QueueSpec("pipeline.start", ("recording.processing_requested",))
-QUEUES = (PIPELINE_START,)
+PROGRESS_EVENTS = QueueSpec(
+    "progress.events",
+    (
+        "recording.processing_requested",
+        "recording.completed",
+        "recording.failed",
+        "recording.cancelled",
+    ),
+)
+QUEUES = (PIPELINE_START, PROGRESS_EVENTS)
 
 
 @dataclass(frozen=True, slots=True)

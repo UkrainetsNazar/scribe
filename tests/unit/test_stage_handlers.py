@@ -20,7 +20,12 @@ from scribe.domain.pipeline import (
 )
 from scribe.domain.recordings import Recording
 from scribe.domain.transcript import Segment, Summary, Transcription
-from tests.unit.fakes import FakeObjectStorage, FakeTranscriber, FakeTranscriptIndex
+from tests.unit.fakes import (
+    FakeObjectStorage,
+    FakeProgressPublisher,
+    FakeTranscriber,
+    FakeTranscriptIndex,
+)
 from tests.unit.test_domain_recording import make_recording
 
 BUCKET = "artifacts"
@@ -117,6 +122,21 @@ async def test_index_receives_transcript_and_summary() -> None:
 
     assert index.indexed == [(recording.id, transcription, summary)]
     assert isinstance(index.indexed[0][0], UUID)
+
+
+async def test_transcribe_publishes_partial_segments() -> None:
+    storage, events = FakeObjectStorage(), FakeProgressPublisher()
+    recording = make_recording(language="uk")
+    await _seed_chunks(storage, recording, 2)
+
+    await TranscribeHandler(storage, FakeTranscriber(), BUCKET, events).execute(_ctx(recording, []))
+
+    assert [(m["start"], m["end"], m["text"]) for _, m in events.transient] == [
+        (0.0, 1.0, "call 1"),
+        (10.0, 11.0, "call 2"),
+    ]
+    assert all(rid == recording.id for rid, _ in events.transient)
+    assert events.states == []  # partial segments are never stored as state
 
 
 FakeStorage = FakeObjectStorage

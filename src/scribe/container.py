@@ -1,6 +1,7 @@
 from dependency_injector import containers, providers
 
 from scribe.application.pipeline import StageRunner
+from scribe.application.progress import BestEffortPublisher
 from scribe.application.stage_handlers import (
     BuildSubtitlesHandler,
     ExtractAudioHandler,
@@ -43,6 +44,7 @@ from scribe.infrastructure.media.ffprobe import FfprobeMediaProbe
 from scribe.infrastructure.messaging.publisher import RabbitMqPublisher
 from scribe.infrastructure.messaging.relay import OutboxRelay
 from scribe.infrastructure.mongo import MongoTranscriptIndex, create_mongo_client, get_database
+from scribe.infrastructure.progress_bus import RedisProgressBus
 from scribe.infrastructure.redis_client import create_redis
 from scribe.infrastructure.security.passwords import Argon2PasswordHasher
 from scribe.infrastructure.security.refresh_store import RedisRefreshTokenStore
@@ -109,6 +111,8 @@ class Container(containers.DeclarativeContainer):
     pipeline_dispatcher = providers.Singleton(CeleryPipelineDispatcher)
     mongo_db = providers.Singleton(get_database, client=mongo, name=settings.provided.mongo_db)
     transcript_index = providers.Singleton(MongoTranscriptIndex, db=mongo_db)
+    progress_bus = providers.Singleton(RedisProgressBus, redis=redis)
+    progress_publisher = providers.Singleton(BestEffortPublisher, inner=progress_bus)
     audio_processor = providers.Singleton(
         FfmpegAudioProcessor,
         binary=settings.provided.ffmpeg_bin,
@@ -146,6 +150,7 @@ class Container(containers.DeclarativeContainer):
         storage=object_storage,
         transcriber=transcriber,
         artifacts_bucket=settings.provided.minio_bucket_artifacts,
+        events=progress_publisher,
     )
     subtitles_handler = providers.Factory(
         BuildSubtitlesHandler,
@@ -175,6 +180,7 @@ class Container(containers.DeclarativeContainer):
             summarize_handler,
             index_handler,
         ),
+        events=progress_publisher,
     )
 
     # ── Use cases: auth ──

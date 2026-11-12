@@ -23,6 +23,7 @@ class RecordingEvent(DomainEvent):
 
     recording_id: UUID
     owner_id: UUID
+    run: int = 0
 
     @property
     def aggregate_id(self) -> UUID:
@@ -46,7 +47,6 @@ class RecordingProcessingRequested(RecordingEvent):
     event_type: ClassVar[str] = "recording.processing_requested"
 
     storage_key: str
-    run: int = 1  # the aggregate always sets it explicitly
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -59,6 +59,7 @@ class RecordingFailed(RecordingEvent):
     event_type: ClassVar[str] = "recording.failed"
 
     reason: str
+    stage: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

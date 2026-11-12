@@ -169,17 +169,27 @@ class Recording:
 
     def complete(self) -> None:
         self._move(S.COMPLETED)
-        self.events.append(RecordingCompleted(recording_id=self.id, owner_id=self.owner_id))
+        self.events.append(
+            RecordingCompleted(recording_id=self.id, owner_id=self.owner_id, run=self.run)
+        )
 
-    def fail(self, reason: str) -> None:
+    def fail(self, reason: str, stage: str | None = None) -> None:
         self._move(S.FAILED)
         self.events.append(
-            RecordingFailed(recording_id=self.id, owner_id=self.owner_id, reason=reason)
+            RecordingFailed(
+                recording_id=self.id,
+                owner_id=self.owner_id,
+                run=self.run,
+                reason=reason,
+                stage=stage,
+            )
         )
 
     def cancel(self) -> None:
         self._move(S.CANCELLED)
-        self.events.append(RecordingCancelled(recording_id=self.id, owner_id=self.owner_id))
+        self.events.append(
+            RecordingCancelled(recording_id=self.id, owner_id=self.owner_id, run=self.run)
+        )
 
     def delete(self) -> None:
         self._move(S.DELETED)
