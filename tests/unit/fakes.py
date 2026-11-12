@@ -298,13 +298,13 @@ class FakeObjectStorage(ObjectStorage):
         return self.objects.get((bucket, key))
 
     async def upload_file(self, bucket: str, key: str, path: Path, content_type: str) -> None:
-        self.blobs[(bucket, key)] = path.read_bytes()
+        self.blobs[(bucket, key)] = await asyncio.to_thread(path.read_bytes)
 
     async def download_file(self, bucket: str, key: str, path: Path) -> None:
         data = self.blobs.get((bucket, key))
         if data is None:
             raise FileNotFoundError(key)
-        path.write_bytes(data)
+        await asyncio.to_thread(path.write_bytes, data)
 
     async def put_bytes(self, bucket: str, key: str, data: bytes, content_type: str) -> None:
         self.blobs[(bucket, key)] = data
