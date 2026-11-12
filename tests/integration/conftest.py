@@ -9,6 +9,7 @@ import pytest
 from alembic import command
 from asgi_lifespan import LifespanManager
 from dependency_injector import providers
+from pymongo import MongoClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.core.container import DockerContainer
 from testcontainers.postgres import PostgresContainer
@@ -151,3 +152,20 @@ async def api_client(
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             yield client
+
+
+@pytest.fixture(scope="session")
+def mongo_url() -> Iterator[str]:
+    container = DockerContainer("mongo:7").with_exposed_ports(27017)
+    with container:
+        url = f"mongodb://{container.get_container_host_ip()}:{container.get_exposed_port(27017)}"
+        for _ in range(60):
+            try:
+                with MongoClient(url, serverSelectionTimeoutMS=1000) as client:
+                    client.admin.command("ping")
+                break
+            except Exception:
+                time.sleep(0.5)
+        else:
+            raise RuntimeError("MongoDB did not become ready in time")
+        yield url

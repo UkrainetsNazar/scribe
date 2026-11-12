@@ -33,10 +33,14 @@ class FfmpegAudioProcessor(AudioProcessor):
             "-reset_timestamps", "1",
             str(out_dir / "chunk_%04d.wav"),
         )  # fmt: skip
-        chunks = sorted(out_dir.glob("chunk_*.wav"))
+        chunks = await asyncio.to_thread(self._list_chunks, out_dir)
         if not chunks:
             raise PermanentStageError("ffmpeg produced no audio")
         return chunks
+
+    @staticmethod
+    def _list_chunks(out_dir: Path) -> list[Path]:
+        return sorted(out_dir.glob("chunk_*.wav"))
 
     async def _run(self, *args: str) -> None:
         try:

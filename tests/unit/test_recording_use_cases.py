@@ -1,22 +1,29 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from scribe.application.interfaces import UnitOfWorkFactory
 from scribe.application.use_cases.recordings import (
+    CancelRecording,
     CompleteUpload,
     CreatedRecording,
     CreateRecording,
     DeleteRecording,
     GetRecording,
+    RetryRecording,
 )
 from scribe.domain.errors import (
     FileTooLargeError,
     InvalidMediaError,
     InvalidStateError,
     NotFoundError,
+    QuotaExceededError,
     UploadMissingError,
 )
 from scribe.domain.events import RecordingCreated, RecordingProcessingRequested
+from scribe.domain.pipeline import PIPELINE_STAGES
 from scribe.domain.projects import Project
+from scribe.domain.quota import usage_period
 from scribe.domain.recordings import MAX_DURATION_SEC, Recording, RecordingStatus
 from scribe.domain.users import User
 from tests.unit.fakes import FREE_PLAN, FakeDb, FakeMediaProbe, FakeObjectStorage
@@ -25,8 +32,10 @@ BUCKET = "uploads"
 
 
 @pytest.fixture
-def user() -> User:
-    return User.register("a@example.com", "hash", FREE_PLAN)
+def user(db: FakeDb) -> User:
+    user = User.register("a@example.com", "hash", FREE_PLAN)
+    db.users[user.id] = user
+    return user
 
 
 @pytest.fixture
@@ -219,3 +228,72 @@ async def test_delete_rules(
     await delete.execute(user.id, fresh.id)
     with pytest.raises(NotFoundError):
         await get.execute(user.id, fresh.id)
+
+
+async def test_complete_charges_quota_and_creates_stages(
+    create: CreateRecording,
+    complete: CompleteUpload,
+    storage: FakeObjectStorage,
+    user: User,
+    project: Project,
+    db: FakeDb,
+) -> None:
+    recording = await _uploaded(create, storage, user, project)
+    await complete.execute(user.id, recording.id)
+    assert db.usage[(user.id, usage_period(datetime.now(UTC)))] == 1  # 60 s -> 1 minute
+    assert len(db.stages) == len(PIPELINE_STAGES)
+
+
+async def test_quota_exceeded_fails_before_processing(
+    create: CreateRecording,
+    complete: CompleteUpload,
+    storage: FakeObjectStorage,
+    user: User,
+    project: Project,
+    db: FakeDb,
+) -> None:
+    db.usage[(user.id, usage_period(datetime.now(UTC)))] = 300  # the free plan limit
+    recording = await _uploaded(create, storage, user, project)
+    with pytest.raises(QuotaExceededError):
+        await complete.execute(user.id, recording.id)
+    assert db.recordings[recording.id].status is RecordingStatus.FAILED
+    assert db.stages == {}
+    assert RecordingProcessingRequested not in {type(e) for e in db.events}
+
+
+async def test_cancel_then_retry(
+    create: CreateRecording,
+    complete: CompleteUpload,
+    storage: FakeObjectStorage,
+    uow_factory: UnitOfWorkFactory,
+    user: User,
+    project: Project,
+    db: FakeDb,
+) -> None:
+    cancel, retry = CancelRecording(uow_factory), RetryRecording(uow_factory)
+    recording = await _uploaded(create, storage, user, project)
+    await complete.execute(user.id, recording.id)
+    assert db.recordings[recording.id].run == 1
+
+    assert (await cancel.execute(user.id, recording.id)).status is RecordingStatus.CANCELLED
+    assert (await cancel.execute(user.id, recording.id)).status is RecordingStatus.CANCELLED
+
+    retried = await retry.execute(user.id, recording.id)
+    assert retried.status is RecordingStatus.PROCESSING
+    assert retried.run == 2  # tasks of run 1 are stale now
+    assert (await retry.execute(user.id, recording.id)).run == 2  # idempotent
+    requested = [e for e in db.events if isinstance(e, RecordingProcessingRequested)]
+    assert [e.run for e in requested] == [1, 2]
+
+
+async def test_retry_and_cancel_reject_wrong_states(
+    create: CreateRecording,
+    uow_factory: UnitOfWorkFactory,
+    user: User,
+    project: Project,
+) -> None:
+    fresh = (await _create(create, user, project)).recording
+    with pytest.raises(InvalidStateError):
+        await RetryRecording(uow_factory).execute(user.id, fresh.id)
+    with pytest.raises(InvalidStateError):
+        await CancelRecording(uow_factory).execute(user.id, fresh.id)
