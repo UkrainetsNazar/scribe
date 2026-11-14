@@ -1,0 +1,83 @@
+# Routers, middlewares and upstream services.
+# Middlewares run in the listed order: CORS first, so preflight requests are answered
+# before authentication; rate limiting before auth, so garbage cannot flood the auth endpoint.
+http:
+  routers:
+    auth:
+      rule: "PathPrefix(`/api/v1/auth/`)"
+      entryPoints: [web]
+      priority: 40
+      middlewares: [cors, rate-limit-auth]
+      service: api
+
+    public:
+      rule: "PathPrefix(`/health/`) || Path(`/docs`) || Path(`/redoc`) || Path(`/openapi.json`)"
+      entryPoints: [web]
+      priority: 30
+      middlewares: [cors, rate-limit]
+      service: api
+
+    rest:
+      rule: "PathPrefix(`/api/`)"
+      entryPoints: [web]
+      priority: 20
+      middlewares: [cors, rate-limit, jwt-auth]
+      service: api
+
+    ws:
+      # The token is in the query string: the WebSocket endpoint authenticates the handshake itself
+      rule: "PathPrefix(`/ws/`)"
+      entryPoints: [web]
+      priority: 20
+      middlewares: [rate-limit]
+      service: ws
+
+  middlewares:
+    cors:
+      headers:
+        accessControlAllowOriginList:
+          - "http://localhost:3000"
+          - "http://localhost:5173"
+        accessControlAllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+        accessControlAllowHeaders: [Authorization, Content-Type, X-Request-ID]
+        accessControlExposeHeaders: [X-Trace-Id, Retry-After]
+        accessControlMaxAge: 600
+        addVaryHeader: true
+
+    # Per client IP. Token bucket: `average` per `period`, up to `burst` at once
+    rate-limit:
+      rateLimit:
+        average: 100
+        period: 1s
+        burst: 200
+
+    # Stricter for register/login/refresh (brute force protection)
+    rate-limit-auth:
+      rateLimit:
+        average: 60
+        period: 1m
+        burst: 20
+
+    # Stateless token check (signature, expiry, type). The endpoints still load the user.
+    jwt-auth:
+      forwardAuth:
+        address: "http://api:8000/internal/auth"
+        authRequestHeaders: [Authorization, X-Request-ID]
+
+  services:
+    api:
+      loadBalancer:
+        servers:
+          - url: "http://api:8000"
+        healthCheck:
+          path: /health/live
+          interval: 5s
+          timeout: 3s
+    ws:
+      loadBalancer:
+        servers:
+          - url: "http://ws:8000"
+        healthCheck:
+          path: /health/live
+          interval: 5s
+          timeout: 3s

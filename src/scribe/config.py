@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     app_env: Literal["local", "test", "prod"] = "local"
     log_level: str = "INFO"
     log_json: bool = True
+    app_role: Literal["all", "api", "ws"] = "all"
 
     # PostgreSQL
     database_url: str = "postgresql+asyncpg://scribe:scribe@localhost:5432/scribe"

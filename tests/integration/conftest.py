@@ -30,7 +30,7 @@ RABBIT_IMAGE = "rabbitmq:3.13-management-alpine"
 MONGO_DB = "scribe_test"
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def app_settings(migrated_db: str, redis_url: str, minio_endpoint: str, mongo_url: str) -> Settings:
     return Settings(
         database_url=migrated_db,

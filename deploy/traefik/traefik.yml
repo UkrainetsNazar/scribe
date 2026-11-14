@@ -1,0 +1,30 @@
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+entryPoints:
+  web:
+    address: ":8000"
+    transport:
+      respondingTimeouts:
+        # WebSocket connections are long-lived; a read timeout could cut them.
+        # Development setting: put a hardened edge proxy in front for production.
+        readTimeout: 0s
+        idleTimeout: 180s
+  traefik:
+    address: ":8080"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+# Dashboard and ping on :8080 (published to localhost only in docker-compose.yml)
+api:
+  dashboard: true
+  insecure: true
+
+ping: {}
+
+log:
+  level: INFO
