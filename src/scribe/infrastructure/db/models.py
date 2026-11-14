@@ -139,3 +139,15 @@ class UsageModel(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
     period: Mapped[str] = mapped_column(String(7), primary_key=True)  # YYYY-MM
     minutes_used: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+
+
+class ExportModel(Base):
+    __tablename__ = "exports"
+    __table_args__ = (UniqueConstraint("recording_id", "format"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    recording_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("recordings.id", ondelete="CASCADE"))
+    format: Mapped[str] = mapped_column(String(10))
+    storage_key: Mapped[str] = mapped_column(String(512))
+    status: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

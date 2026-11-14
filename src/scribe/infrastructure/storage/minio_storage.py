@@ -92,6 +92,17 @@ class MinioObjectStorage(ObjectStorage):
             response.close()
             response.release_conn()
 
+    async def create_download_url(
+        self, bucket: str, key: str, ttl_seconds: int, filename: str
+    ) -> str:
+        return await asyncio.to_thread(
+            self._public.presigned_get_object,
+            bucket,
+            key,
+            timedelta(seconds=ttl_seconds),
+            response_headers={"response-content-disposition": f'attachment; filename="{filename}"'},
+        )
+
 
 def create_object_storage(settings: Settings) -> MinioObjectStorage:
     secret = settings.minio_secret_key.get_secret_value()

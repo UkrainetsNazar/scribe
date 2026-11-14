@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from scribe.application.interfaces import UnitOfWork
 from scribe.application.outbox import to_outbox_record
+from scribe.infrastructure.db.export_repositories import SqlAlchemyExportRepository
 from scribe.infrastructure.db.messaging_repositories import (
     SqlAlchemyInboxRepository,
     SqlAlchemyOutboxRepository,
@@ -49,6 +50,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self.outbox = SqlAlchemyOutboxRepository(self._session)
         self.stages = SqlAlchemyStageRepository(self._session)
         self.usage = SqlAlchemyUsageRepository(self._session)
+        self.exports = SqlAlchemyExportRepository(self._session)
         return self
 
     async def __aexit__(

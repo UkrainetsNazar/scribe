@@ -41,3 +41,18 @@ def build_page[T](rows: Sequence[T], limit: int, cursor_of: Callable[[T], Cursor
         items = list(rows[:limit])
         return Page(items=items, next_cursor=encode_cursor(cursor_of(items[-1])))
     return Page(items=list(rows), next_cursor=None)
+
+
+def encode_index_cursor(idx: int) -> str:
+    """Cursor of an index-ordered list (transcript segments): the last returned idx."""
+    return base64.urlsafe_b64encode(json.dumps({"i": idx}).encode()).decode()
+
+
+def decode_index_cursor(value: str) -> int:
+    try:
+        idx = json.loads(base64.urlsafe_b64decode(value.encode()))["i"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise BadRequestError("Invalid cursor") from exc
+    if not isinstance(idx, int) or isinstance(idx, bool) or idx < 0:
+        raise BadRequestError("Invalid cursor")
+    return idx

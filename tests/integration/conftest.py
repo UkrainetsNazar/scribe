@@ -15,8 +15,10 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
 
+import scribe.workers.pipeline_tasks  # noqa: F401  (registers the Celery tasks)
 from scribe.config import Settings
 from scribe.container import Container
+from scribe.infrastructure.celery_app import celery_app
 from scribe.presentation.app import create_app
 from tests.integration.helpers import alembic_config
 
@@ -25,6 +27,49 @@ MINIO_IMAGE = "docker.io/pgsty/silo:RELEASE.2026-10-26T00-00-00Z"
 MINIO_USER = "scribe"
 MINIO_PASSWORD = "scribe-secret"
 RABBIT_IMAGE = "rabbitmq:3.13-management-alpine"
+MONGO_DB = "scribe_test"
+
+
+@pytest.fixture
+def app_settings(migrated_db: str, redis_url: str, minio_endpoint: str, mongo_url: str) -> Settings:
+    return Settings(
+        database_url=migrated_db,
+        redis_url=redis_url,
+        mongo_url=mongo_url,
+        mongo_db=MONGO_DB,
+        log_json=False,
+        minio_endpoint=minio_endpoint,
+        minio_public_endpoint=minio_endpoint,
+        minio_access_key=MINIO_USER,
+        minio_secret_key=MINIO_PASSWORD,  # type: ignore[arg-type]
+    )
+
+
+@pytest.fixture
+def pipeline_env(
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
+    minio_endpoint: str,
+    mongo_url: str,
+    redis_url: str,
+) -> Iterator[None]:
+    """Runs Celery tasks in-process (eager) against the test containers."""
+    env = {
+        "DATABASE_URL": migrated_db,
+        "REDIS_URL": redis_url,
+        "MONGO_URL": mongo_url,
+        "MONGO_DB": MONGO_DB,
+        "MINIO_ENDPOINT": minio_endpoint,
+        "MINIO_ACCESS_KEY": MINIO_USER,
+        "MINIO_SECRET_KEY": MINIO_PASSWORD,
+        "TRANSCRIBER": "stub",
+        "LOG_JSON": "false",
+    }
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    celery_app.conf.task_always_eager = True
+    yield
+    celery_app.conf.task_always_eager = False
 
 
 def _free_port() -> int:
@@ -130,19 +175,6 @@ async def session_factory(migrated_db: str) -> AsyncIterator[async_sessionmaker[
     engine = create_async_engine(migrated_db)
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
-
-
-@pytest.fixture
-def app_settings(migrated_db: str, redis_url: str, minio_endpoint: str) -> Settings:
-    return Settings(
-        database_url=migrated_db,
-        redis_url=redis_url,
-        log_json=False,
-        minio_endpoint=minio_endpoint,
-        minio_public_endpoint=minio_endpoint,
-        minio_access_key=MINIO_USER,
-        minio_secret_key=MINIO_PASSWORD,  # type: ignore[arg-type]
-    )
 
 
 @pytest.fixture

@@ -99,6 +99,20 @@ class SqlAlchemyRecordingRepository(RecordingRepository):
         rows = (await self._session.execute(stmt)).scalars().all()
         return [_to_domain(m) for m in rows]
 
+    async def list_completed_ids(
+        self, owner_id: UUID, project_id: UUID | None, limit: int
+    ) -> list[UUID]:
+        stmt = select(RecordingModel.id).where(
+            RecordingModel.owner_id == owner_id,
+            RecordingModel.status == RecordingStatus.COMPLETED.value,
+        )
+        if project_id is not None:
+            stmt = stmt.where(RecordingModel.project_id == project_id)
+        stmt = stmt.order_by(RecordingModel.created_at.desc(), RecordingModel.id.desc()).limit(
+            limit
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
     async def save(self, recording: Recording) -> None:
         await self._session.execute(
             update(RecordingModel)

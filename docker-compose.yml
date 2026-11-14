@@ -2,7 +2,7 @@ name: scribe
 
 x-app-env: &app-env
   APP_ENV: local
-  DATABASE_URL: postgresql+asyncpg://scribe:scribe@postgres:5432/scribe
+  DATABASE_URL: postgresql+asyncpg://scribe:scribe@postgres:5433/scribe
   MONGO_URL: mongodb://mongo:27017
   REDIS_URL: redis://redis:6379/0
   RABBITMQ_URL: amqp://scribe:scribe@rabbitmq:5672/
@@ -17,7 +17,7 @@ services:
       POSTGRES_USER: scribe
       POSTGRES_PASSWORD: scribe
       POSTGRES_DB: scribe
-    ports: ["5432:5432"]
+    ports: ["5433:5432"]
     volumes: [pg_data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U scribe -d scribe"]

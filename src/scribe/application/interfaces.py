@@ -10,6 +10,7 @@ from uuid import UUID
 from scribe.application.messaging import InboxRepository
 from scribe.application.pagination import Cursor
 from scribe.domain.events import DomainEvent
+from scribe.domain.exports import Export, ExportFormat
 from scribe.domain.pipeline import ProcessingStage, StageName
 from scribe.domain.projects import Project
 from scribe.domain.recordings import Recording, RecordingStatus
@@ -76,6 +77,12 @@ class RecordingRepository(ABC):
         """Returns up to limit + 1 rows, newest first."""
 
     @abstractmethod
+    async def list_completed_ids(
+        self, owner_id: UUID, project_id: UUID | None, limit: int
+    ) -> list[UUID]:
+        """Ids of completed, non-deleted recordings, newest first."""
+
+    @abstractmethod
     async def save(self, recording: Recording) -> None: ...
 
 
@@ -107,6 +114,15 @@ class UsageRepository(ABC):
     async def get_minutes(self, user_id: UUID, period: str) -> int: ...
 
 
+class ExportRepository(ABC):
+    @abstractmethod
+    async def upsert(self, export: Export) -> None:
+        """Insert, or update the existing (recording, format) row; its id is kept."""
+
+    @abstractmethod
+    async def get(self, recording_id: UUID, fmt: ExportFormat) -> Export | None: ...
+
+
 class UnitOfWork(ABC):
     users: UserRepository
     plans: PlanRepository
@@ -115,6 +131,7 @@ class UnitOfWork(ABC):
     inbox: InboxRepository
     stages: StageRepository
     usage: UsageRepository
+    exports: ExportRepository
 
     def __init__(self) -> None:
         self.events: list[DomainEvent] = []
@@ -243,6 +260,12 @@ class ObjectStorage(ABC):
     @abstractmethod
     async def get_bytes(self, bucket: str, key: str) -> bytes | None:
         """None if the object does not exist."""
+
+    @abstractmethod
+    async def create_download_url(
+        self, bucket: str, key: str, ttl_seconds: int, filename: str
+    ) -> str:
+        """Presigned GET URL for clients; the browser saves the file as `filename`."""
 
 
 class MediaProbe(ABC):

@@ -17,6 +17,7 @@ from scribe.application.use_cases.auth import (
     RefreshTokens,
     RegisterUser,
 )
+from scribe.application.use_cases.exports import CreateExport, GetExportLink
 from scribe.application.use_cases.projects import (
     CreateProject,
     DeleteProject,
@@ -33,6 +34,7 @@ from scribe.application.use_cases.recordings import (
     ListRecordings,
     RetryRecording,
 )
+from scribe.application.use_cases.results import GetSummary, GetTranscript, SearchTranscripts
 from scribe.application.use_cases.usage import GetMonthlyUsage
 from scribe.config import Settings
 from scribe.infrastructure.celery_dispatcher import CeleryPipelineDispatcher
@@ -43,7 +45,12 @@ from scribe.infrastructure.media.ffmpeg import FfmpegAudioProcessor
 from scribe.infrastructure.media.ffprobe import FfprobeMediaProbe
 from scribe.infrastructure.messaging.publisher import RabbitMqPublisher
 from scribe.infrastructure.messaging.relay import OutboxRelay
-from scribe.infrastructure.mongo import MongoTranscriptIndex, create_mongo_client, get_database
+from scribe.infrastructure.mongo import (
+    MongoTranscriptIndex,
+    MongoTranscriptReader,
+    create_mongo_client,
+    get_database,
+)
 from scribe.infrastructure.progress_bus import RedisProgressBus
 from scribe.infrastructure.redis_client import create_redis
 from scribe.infrastructure.security.passwords import Argon2PasswordHasher
@@ -231,3 +238,27 @@ class Container(containers.DeclarativeContainer):
     get_recording = providers.Factory(GetRecording, uow_factory=uow.provider)
     list_recordings = providers.Factory(ListRecordings, uow_factory=uow.provider)
     delete_recording = providers.Factory(DeleteRecording, uow_factory=uow.provider)
+
+    # ── Use cases: results ──
+    transcript_reader = providers.Singleton(MongoTranscriptReader, db=mongo_db)
+    get_transcript = providers.Factory(
+        GetTranscript, uow_factory=uow.provider, reader=transcript_reader
+    )
+    get_summary = providers.Factory(GetSummary, uow_factory=uow.provider, reader=transcript_reader)
+    search_transcripts = providers.Factory(
+        SearchTranscripts, uow_factory=uow.provider, reader=transcript_reader
+    )
+    create_export = providers.Factory(
+        CreateExport,
+        uow_factory=uow.provider,
+        storage=object_storage,
+        artifacts_bucket=settings.provided.minio_bucket_artifacts,
+        exports_bucket=settings.provided.minio_bucket_exports,
+    )
+    get_export_link = providers.Factory(
+        GetExportLink,
+        uow_factory=uow.provider,
+        storage=object_storage,
+        bucket=settings.provided.minio_bucket_exports,
+        ttl_min=settings.provided.presigned_url_ttl_min,
+    )

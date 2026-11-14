@@ -3,7 +3,14 @@ from uuid import uuid4
 
 import pytest
 
-from scribe.application.pagination import Cursor, build_page, decode_cursor, encode_cursor
+from scribe.application.pagination import (
+    Cursor,
+    build_page,
+    decode_cursor,
+    decode_index_cursor,
+    encode_cursor,
+    encode_index_cursor,
+)
 from scribe.domain.errors import BadRequestError
 
 
@@ -29,3 +36,15 @@ def test_build_page() -> None:
     last = build_page([1, 2], limit=2, cursor_of=cursor_of)
     assert last.items == [1, 2]
     assert last.next_cursor is None
+
+
+def test_index_cursor_roundtrip() -> None:
+    assert decode_index_cursor(encode_index_cursor(41)) == 41
+
+
+@pytest.mark.parametrize(
+    "value", ["", "not-base64!!", "e30=", "W10=", "eyJpIjogLTF9", "eyJpIjogdHJ1ZX0="]
+)
+def test_invalid_index_cursor(value: str) -> None:
+    with pytest.raises(BadRequestError):
+        decode_index_cursor(value)

@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
@@ -7,6 +8,7 @@ from uuid import UUID
 
 from scribe.application.inbox import EventHandler, InboundEvent
 from scribe.application.interfaces import (
+    ExportRepository,
     MediaInfo,
     MediaProbe,
     ObjectStorage,
@@ -25,8 +27,10 @@ from scribe.application.messaging import InboxRepository
 from scribe.application.pagination import Cursor
 from scribe.application.pipeline_ports import PipelineDispatcher, Transcriber, TranscriptIndex
 from scribe.application.progress import Message, ProgressPublisher
+from scribe.application.read_ports import IndexedSegment, SearchHit, TranscriptReader
 from scribe.domain.errors import EmailTakenError, InvalidMediaError
 from scribe.domain.events import DomainEvent
+from scribe.domain.exports import Export, ExportFormat
 from scribe.domain.pipeline import PIPELINE_STAGES, ProcessingStage, StageName, StageStatus
 from scribe.domain.projects import Project
 from scribe.domain.recordings import Recording, RecordingStatus
@@ -48,6 +52,7 @@ class FakeDb:
     usage: dict[tuple[UUID, str], int] = field(default_factory=dict)
     events: list[DomainEvent] = field(default_factory=list)  # committed events
     inbox: set[tuple[UUID, str]] = field(default_factory=set)  # committed inbox keys
+    exports: dict[tuple[UUID, ExportFormat], Export] = field(default_factory=dict)
 
 
 def _paginate(items: list[Any], cursor: Cursor | None, limit: int) -> list[Any]:
@@ -144,6 +149,18 @@ class InMemoryRecordingRepository(RecordingRepository):
         ]
         return _paginate(items, cursor, limit)
 
+    async def list_completed_ids(
+        self, owner_id: UUID, project_id: UUID | None, limit: int
+    ) -> list[UUID]:
+        items = [
+            r
+            for r in self._alive(owner_id)
+            if r.status is RecordingStatus.COMPLETED
+            and (project_id is None or r.project_id == project_id)
+        ]
+        items.sort(key=lambda r: (r.created_at, r.id), reverse=True)
+        return [r.id for r in items[:limit]]
+
     async def save(self, recording: Recording) -> None:
         self._recordings[recording.id] = recording
 
@@ -218,6 +235,22 @@ class InMemoryInboxRepository(InboxRepository):
         self._pending.clear()
 
 
+class InMemoryExportRepository(ExportRepository):
+    def __init__(self, exports: dict[tuple[UUID, ExportFormat], Export]) -> None:
+        self._exports = exports
+
+    async def upsert(self, export: Export) -> None:
+        existing = self._exports.get((export.recording_id, export.format))
+        if existing is None:
+            self._exports[(export.recording_id, export.format)] = export
+        else:  # like ON CONFLICT DO UPDATE: the id of the existing row is kept
+            existing.storage_key = export.storage_key
+            existing.status = export.status
+
+    async def get(self, recording_id: UUID, fmt: ExportFormat) -> Export | None:
+        return self._exports.get((recording_id, fmt))
+
+
 class FakeUnitOfWork(UnitOfWork):
     def __init__(self, db: FakeDb) -> None:
         super().__init__()
@@ -229,6 +262,7 @@ class FakeUnitOfWork(UnitOfWork):
         self.stages = InMemoryStageRepository(db.stages)
         self.usage = InMemoryUsageRepository(db.usage)
         self._inbox = InMemoryInboxRepository(db.inbox)
+        self.exports = InMemoryExportRepository(db.exports)
         self.inbox = self._inbox
 
     async def __aenter__(self) -> Self:
@@ -313,6 +347,11 @@ class FakeObjectStorage(ObjectStorage):
     async def get_bytes(self, bucket: str, key: str) -> bytes | None:
         return self.blobs.get((bucket, key))
 
+    async def create_download_url(
+        self, bucket: str, key: str, ttl_seconds: int, filename: str
+    ) -> str:
+        return f"http://storage.test/download/{bucket}/{key}?name={filename}"
+
 
 class FakeMediaProbe(MediaProbe):
     def __init__(self, duration_sec: float = 60.0, error: str | None = None) -> None:
@@ -391,3 +430,34 @@ class FakeProgressPublisher(ProgressPublisher):
 
     async def publish_transient(self, recording_id: UUID, message: Message) -> None:
         self.transient.append((recording_id, message))
+
+
+class FakeTranscriptReader(TranscriptReader):
+    def __init__(self) -> None:
+        self.segments: dict[UUID, list[Segment]] = {}
+        self.summaries: dict[UUID, Summary] = {}
+
+    async def list_segments(
+        self, recording_id: UUID, owner_id: UUID, *, from_sec: float, after_idx: int, limit: int
+    ) -> list[IndexedSegment]:
+        rows = [
+            IndexedSegment(idx, segment)
+            for idx, segment in enumerate(self.segments.get(recording_id, []))
+            if idx > after_idx and segment.end >= from_sec
+        ]
+        return rows[: limit + 1]
+
+    async def get_summary(self, recording_id: UUID) -> Summary | None:
+        return self.summaries.get(recording_id)
+
+    async def search(
+        self, owner_id: UUID, query: str, recording_ids: Sequence[UUID], limit: int
+    ) -> list[SearchHit]:
+        terms = query.lower().split()
+        hits = [
+            SearchHit(recording_id, idx, segment, 1.0)
+            for recording_id in recording_ids
+            for idx, segment in enumerate(self.segments.get(recording_id, []))
+            if any(term in segment.text.lower() for term in terms)
+        ]
+        return hits[:limit]

@@ -3,7 +3,6 @@ import io
 import json
 import shutil
 import uuid
-from collections.abc import Iterator
 from datetime import UTC, datetime
 
 import httpx
@@ -17,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 import scribe.workers.pipeline_tasks  # noqa: F401  (registers the Celery tasks)
 from scribe.domain.pipeline import PIPELINE_STAGES
 from scribe.infrastructure.celery_app import PIPELINE_QUEUE, celery_app, stage_task_name
-from tests.integration.conftest import MINIO_PASSWORD, MINIO_USER
+from tests.integration.conftest import MINIO_PASSWORD, MINIO_USER, MONGO_DB
 from tests.integration.helpers import API, auth_headers
 from tests.integration.test_recordings_api import _recording_with_upload, make_wav
 
@@ -27,35 +26,7 @@ requires_ffmpeg = pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
     reason="ffmpeg/ffprobe are not installed (brew install ffmpeg)",
 )
-MONGO_DB = "scribe_test"
 SOURCE_NAME = "standup.wav"  # filename used by _recording_with_upload
-
-
-@pytest.fixture
-def pipeline_env(
-    monkeypatch: pytest.MonkeyPatch,
-    migrated_db: str,
-    minio_endpoint: str,
-    mongo_url: str,
-    redis_url: str,
-) -> Iterator[None]:
-    """Runs Celery tasks in-process (eager) against the test containers."""
-    env = {
-        "DATABASE_URL": migrated_db,
-        "REDIS_URL": redis_url,
-        "MONGO_URL": mongo_url,
-        "MONGO_DB": MONGO_DB,
-        "MINIO_ENDPOINT": minio_endpoint,
-        "MINIO_ACCESS_KEY": MINIO_USER,
-        "MINIO_SECRET_KEY": MINIO_PASSWORD,
-        "TRANSCRIBER": "stub",
-        "LOG_JSON": "false",
-    }
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    celery_app.conf.task_always_eager = True
-    yield
-    celery_app.conf.task_always_eager = False
 
 
 def _minio(endpoint: str) -> Minio:
