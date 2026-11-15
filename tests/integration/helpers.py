@@ -1,3 +1,5 @@
+import os
+import shutil
 import uuid
 from pathlib import Path
 
@@ -7,6 +9,10 @@ from alembic.config import Config
 ROOT = Path(__file__).resolve().parents[2]
 API = "/api/v1"
 PASSWORD = "correct-horse-1"
+
+
+def missing_tool(*names: str) -> bool:
+    return not os.environ.get("CI") and any(shutil.which(name) is None for name in names)
 
 
 def alembic_config(database_url: str) -> Config:

@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 import uvicorn
+import yaml
 from dependency_injector import providers
 from testcontainers.core.container import DockerContainer
 from websockets.asyncio.client import connect
@@ -22,15 +23,30 @@ pytestmark = pytest.mark.integration
 GATEWAY_IMAGE = "traefik:v3.3"  # keep in sync with docker-compose.yml
 CONFIG_DIR = ROOT / "deploy" / "traefik"
 ALLOWED_ORIGIN = "http://localhost:3000"
+PROBE_HEADER = "X-Rate-Limit-Probe"
 
 
 def _prepare_config(target: Path, upstream: str) -> None:
-    """The production config, with both services pointing at the test server."""
+    """The production config, with both services pointing at the test server, plus a probe route.
+
+    The probe route has a tiny rate limit and is selected by a header, so the rate limiting
+    test is independent of machine speed and cannot disturb other tests.
+    """
     (target / "traefik.yml").write_text((CONFIG_DIR / "traefik.yml").read_text())
-    dynamic = (CONFIG_DIR / "dynamic.yml").read_text()
+    text = (CONFIG_DIR / "dynamic.yml").read_text()
     for service in ("api", "ws"):
-        dynamic = dynamic.replace(f"http://{service}:8000", upstream)
-    (target / "dynamic.yml").write_text(dynamic)
+        text = text.replace(f"http://{service}:8000", upstream)
+    config = yaml.safe_load(text)
+    http = config["http"]
+    http["middlewares"]["probe-limit"] = {"rateLimit": {"average": 2, "period": "1s", "burst": 5}}
+    http["routers"]["probe"] = {
+        "rule": f"Path(`/health/live`) && Header(`{PROBE_HEADER}`, `1`)",
+        "entryPoints": ["web"],
+        "priority": 100,
+        "middlewares": ["probe-limit"],
+        "service": "api",
+    }
+    (target / "dynamic.yml").write_text(yaml.safe_dump(config))
 
 
 async def _wait_until_routing(url: str, container: DockerContainer) -> None:
@@ -158,12 +174,18 @@ async def test_websocket_handshake_is_still_authenticated(gateway: LiveServer) -
 
 
 async def test_rate_limit_returns_429_with_retry_after(gateway: LiveServer) -> None:
-    """Keep this test last: it drains the bucket of the (shared) client IP."""
-    limits = httpx.Limits(max_connections=100)
-    async with httpx.AsyncClient(base_url=gateway.http_url, limits=limits, timeout=30) as client:
-        responses = await asyncio.gather(*(client.get("/health/live") for _ in range(1000)))
+    headers = {PROBE_HEADER: "1"}
+    statuses: list[int] = []
+    limited: httpx.Response | None = None
+    async with httpx.AsyncClient(base_url=gateway.http_url, timeout=10) as client:
+        for _ in range(60):
+            resp = await client.get("/health/live", headers=headers)
+            statuses.append(resp.status_code)
+            if resp.status_code == 429:
+                limited = resp
+                break
 
-    limited = [r for r in responses if r.status_code == 429]
-    assert limited, "no request was rate limited"
-    assert {r.status_code for r in responses} <= {200, 429}
-    assert "retry-after" in limited[0].headers
+    assert limited is not None, f"no request was rate limited: {statuses}"
+    assert statuses[0] == 200
+    assert set(statuses) <= {200, 429}
+    assert "retry-after" in limited.headers

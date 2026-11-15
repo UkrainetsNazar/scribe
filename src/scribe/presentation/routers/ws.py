@@ -81,5 +81,5 @@ async def recording_events(
             watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await watcher
-        with contextlib.suppress(RuntimeError):
+        with contextlib.suppress(RuntimeError, WebSocketDisconnect):
             await websocket.close()

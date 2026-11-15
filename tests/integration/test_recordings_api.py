@@ -1,18 +1,17 @@
 import asyncio
 import io
 import os
-import shutil
 import wave
 
 import httpx
 import pytest
 
-from tests.integration.helpers import API, auth_headers
+from tests.integration.helpers import API, auth_headers, missing_tool
 
 pytestmark = pytest.mark.integration
 
 requires_ffprobe = pytest.mark.skipif(
-    shutil.which("ffprobe") is None, reason="ffprobe is not installed (brew install ffmpeg)"
+    missing_tool("ffprobe"), reason="ffprobe is not installed (brew install ffmpeg)"
 )
 
 

@@ -1,7 +1,6 @@
 import asyncio
 import io
 import json
-import shutil
 import uuid
 from datetime import UTC, datetime
 
@@ -17,13 +16,13 @@ import scribe.workers.pipeline_tasks  # noqa: F401  (registers the Celery tasks)
 from scribe.domain.pipeline import PIPELINE_STAGES
 from scribe.infrastructure.celery_app import PIPELINE_QUEUE, celery_app, stage_task_name
 from tests.integration.conftest import MINIO_PASSWORD, MINIO_USER, MONGO_DB
-from tests.integration.helpers import API, auth_headers
+from tests.integration.helpers import API, auth_headers, missing_tool
 from tests.integration.test_recordings_api import _recording_with_upload, make_wav
 
 pytestmark = pytest.mark.integration
 
 requires_ffmpeg = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    missing_tool("ffmpeg", "ffprobe"),
     reason="ffmpeg/ffprobe are not installed (brew install ffmpeg)",
 )
 SOURCE_NAME = "standup.wav"  # filename used by _recording_with_upload
