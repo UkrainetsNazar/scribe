@@ -28,3 +28,16 @@ ping: {}
 
 log:
   level: INFO
+
+# Prometheus metrics on the "traefik" entrypoint (:8080/metrics)
+metrics:
+  prometheus:
+    addEntryPointsLabels: true
+    addServicesLabels: true
+
+# The gateway starts the trace and passes `traceparent` to the API
+tracing:
+  serviceName: traefik
+  otlp:
+    http:
+      endpoint: http://jaeger:4318/v1/traces

@@ -52,6 +52,7 @@ from scribe.infrastructure.mongo import (
     get_database,
 )
 from scribe.infrastructure.progress_bus import RedisProgressBus
+from scribe.infrastructure.readiness import ReadinessChecker
 from scribe.infrastructure.redis_client import create_redis
 from scribe.infrastructure.security.passwords import Argon2PasswordHasher
 from scribe.infrastructure.security.refresh_store import RedisRefreshTokenStore
@@ -83,6 +84,14 @@ class Container(containers.DeclarativeContainer):
     mongo = providers.Singleton(create_mongo_client, url=settings.provided.mongo_url)
     session_factory = providers.Singleton(create_session_factory, engine=engine)
     object_storage = providers.Singleton(create_object_storage, settings=settings)
+    readiness = providers.Singleton(
+        ReadinessChecker,
+        engine=engine,
+        redis=redis,
+        mongo=mongo,
+        storage=object_storage,
+        role=settings.provided.app_role,
+    )
 
     # ── Infrastructure ──
     # uow.provider passes the factory itself into the use case: each call creates a new UoW

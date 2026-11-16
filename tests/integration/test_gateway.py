@@ -32,7 +32,9 @@ def _prepare_config(target: Path, upstream: str) -> None:
     The probe route has a tiny rate limit and is selected by a header, so the rate limiting
     test is independent of machine speed and cannot disturb other tests.
     """
-    (target / "traefik.yml").write_text((CONFIG_DIR / "traefik.yml").read_text())
+    traefik_config = yaml.safe_load((CONFIG_DIR / "traefik.yml").read_text())
+    traefik_config.pop("tracing", None)  # there is no Jaeger in the test
+    (target / "traefik.yml").write_text(yaml.safe_dump(traefik_config))
     text = (CONFIG_DIR / "dynamic.yml").read_text()
     for service in ("api", "ws"):
         text = text.replace(f"http://{service}:8000", upstream)

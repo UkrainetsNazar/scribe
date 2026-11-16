@@ -7,7 +7,7 @@ from scribe.application.inbox import EventHandler, InboxGuard
 from scribe.container import Container
 from scribe.infrastructure.messaging.consumer import RabbitMqConsumer
 from scribe.infrastructure.messaging.topology import PIPELINE_START, PROGRESS_EVENTS, QueueSpec
-from scribe.workers.common import connect_with_retry, install_signal_handlers
+from scribe.workers.common import connect_with_retry, init_observability, install_signal_handlers
 
 log = structlog.get_logger()
 
@@ -16,6 +16,9 @@ async def main() -> None:
     container = Container()
     container.init_resources()
     settings = container.settings()
+
+    settings = container.settings()
+    init_observability(settings)
 
     # Queue -> handler. New consumers (webhooks) are added here.
     handlers: list[tuple[QueueSpec, EventHandler]] = [

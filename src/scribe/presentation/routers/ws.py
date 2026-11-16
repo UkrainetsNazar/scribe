@@ -16,6 +16,7 @@ from scribe.application.use_cases.auth import GetUser
 from scribe.application.use_cases.recordings import GetRecording
 from scribe.container import Container
 from scribe.domain.errors import AppError, UnauthorizedError
+from scribe.infrastructure.metrics import WS_CONNECTIONS
 
 router = APIRouter(tags=["websocket"])
 
@@ -62,6 +63,7 @@ async def recording_events(
         return
 
     await websocket.accept()
+    WS_CONNECTIONS.inc()
     watcher: asyncio.Task[None] | None = None
     try:
         async with subscriber.subscribe(recording_id) as subscription:
@@ -77,6 +79,7 @@ async def recording_events(
                     if update.get("type") in TERMINAL_TYPES:
                         break
     finally:
+        WS_CONNECTIONS.dec()
         if watcher is not None:
             watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):

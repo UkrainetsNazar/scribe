@@ -1,11 +1,18 @@
 import asyncio
 import contextlib
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from scribe.application.messaging import MessagePublisher
 from scribe.infrastructure.db.messaging_repositories import SqlAlchemyOutboxRepository
+from scribe.infrastructure.metrics import (
+    OUTBOX_LAG,
+    OUTBOX_PUBLISH_ERRORS,
+    OUTBOX_PUBLISHED,
+    OUTBOX_UNPUBLISHED,
+)
 
 log = structlog.get_logger()
 
@@ -42,11 +49,13 @@ class OutboxRelay:
                     await self._publisher.publish(message)
                 except Exception as exc:
                     failure = exc
+                    OUTBOX_PUBLISH_ERRORS.inc()
                     break  # stop at the first failure to keep the order
                 published.append(message.id)
             if published:
                 await repo.mark_published(published)
                 await session.commit()
+                OUTBOX_PUBLISHED.inc(len(published))
         if failure is not None:
             raise failure
         return len(published)
@@ -66,6 +75,21 @@ class OutboxRelay:
                 log.info("outbox.published", count=count)
             else:
                 await self._sleep(stop, self._poll_interval)
+
+    async def refresh_metrics(self) -> None:
+        async with self._session_factory() as session:
+            count, oldest = await SqlAlchemyOutboxRepository(session).stats()
+        OUTBOX_UNPUBLISHED.set(count)
+        OUTBOX_LAG.set(max(0.0, (datetime.now(UTC) - oldest).total_seconds()) if oldest else 0.0)
+
+    async def run_metrics(self, stop: asyncio.Event, interval_sec: float = 5.0) -> None:
+        """Independent of publishing, so the lag is still reported while the broker is down."""
+        while not stop.is_set():
+            try:
+                await self.refresh_metrics()
+            except Exception:
+                log.warning("outbox.metrics_failed", exc_info=True)
+            await self._sleep(stop, interval_sec)
 
     @staticmethod
     async def _sleep(stop: asyncio.Event, seconds: float) -> None:

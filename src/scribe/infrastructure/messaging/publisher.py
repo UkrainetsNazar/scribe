@@ -4,9 +4,13 @@ from collections.abc import Sequence
 import aio_pika
 import orjson
 from aio_pika.abc import AbstractRobustConnection
+from opentelemetry import propagate, trace
+from opentelemetry.trace import SpanKind
 
 from scribe.application.messaging import MessagePublisher, OutboxMessage
-from scribe.infrastructure.messaging.topology import Topology, declare_topology
+from scribe.infrastructure.messaging.topology import EVENTS_EXCHANGE, Topology, declare_topology
+
+_tracer = trace.get_tracer("scribe.outbox")
 
 
 class RabbitMqPublisher(MessagePublisher):
@@ -31,19 +35,34 @@ class RabbitMqPublisher(MessagePublisher):
     async def publish(self, message: OutboxMessage) -> None:
         if self._topology is None:
             raise RuntimeError("Publisher is not connected")
-        amqp_message = aio_pika.Message(
-            body=orjson.dumps(message.payload),
-            content_type="application/json",
-            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-            message_id=str(message.event_id),
-            type=message.event_type,
-            timestamp=message.created_at,
-            headers={k: v for k, v in message.headers.items() if v is not None},
-        )
-        # Events nobody subscribes to are simply dropped by the broker, hence mandatory=False
-        await asyncio.wait_for(
-            self._topology.events.publish(
-                amqp_message, routing_key=message.event_type, mandatory=False
-            ),
-            timeout=self._timeout,
-        )
+        # Continue the trace of whatever produced the event (stored with the outbox row)
+        parent = propagate.extract(message.headers)
+        with _tracer.start_as_current_span(
+            f"{message.event_type} publish",
+            context=parent,
+            kind=SpanKind.PRODUCER,
+            attributes={
+                "messaging.system": "rabbitmq",
+                "messaging.destination.name": EVENTS_EXCHANGE,
+                "messaging.rabbitmq.destination.routing_key": message.event_type,
+                "messaging.message.id": str(message.event_id),
+            },
+        ):
+            headers = {k: v for k, v in message.headers.items() if v is not None}
+            propagate.inject(headers)  # consumers become children of this span
+            amqp_message = aio_pika.Message(
+                body=orjson.dumps(message.payload),
+                content_type="application/json",
+                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                message_id=str(message.event_id),  # consumers deduplicate by this id
+                type=message.event_type,
+                timestamp=message.created_at,
+                headers=headers,
+            )
+            # Events nobody subscribes to are simply dropped by the broker, hence mandatory=False
+            await asyncio.wait_for(
+                self._topology.events.publish(
+                    amqp_message, routing_key=message.event_type, mandatory=False
+                ),
+                timeout=self._timeout,
+            )

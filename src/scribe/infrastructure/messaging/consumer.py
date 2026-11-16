@@ -1,4 +1,5 @@
 import contextlib
+import time
 from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
@@ -11,6 +12,8 @@ from aio_pika.abc import (
     AbstractIncomingMessage,
     AbstractRobustConnection,
 )
+from opentelemetry import propagate, trace
+from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from scribe.application.inbox import InboundEvent, InboxGuard, PermanentHandlerError
 from scribe.infrastructure.messaging.topology import (
@@ -19,8 +22,10 @@ from scribe.infrastructure.messaging.topology import (
     declare_topology,
     retry_routing_key,
 )
+from scribe.infrastructure.metrics import CONSUMER_DURATION, CONSUMER_MESSAGES, INBOX_DUPLICATES
 
 log = structlog.get_logger()
+_tracer = trace.get_tracer("scribe.consumer")
 
 RETRY_COUNT_HEADER = "x-retry-count"
 
@@ -102,25 +107,49 @@ class RabbitMqConsumer:
                 await message.nack(requeue=True)
 
     async def _handle(self, message: AbstractIncomingMessage) -> None:
+        queue = self._queue.name
         try:
             event = parse_event(message)
         except ValueError as exc:
-            log.warning("consumer.malformed_message", queue=self._queue.name, error=str(exc))
+            log.warning("consumer.malformed_message", queue=queue, error=str(exc))
             await self._dead_letter(message, f"malformed message: {exc}")
             await message.ack()
             return
 
-        try:
-            processed = await self._guard.process(event)
-        except PermanentHandlerError as exc:
-            log.error("consumer.permanent_error", event_id=str(event.event_id), error=str(exc))
-            await self._dead_letter(message, f"permanent error: {exc}")
-        except Exception as exc:
-            log.exception("consumer.handler_failed", event_id=str(event.event_id))
-            await self._retry_or_dead_letter(message, exc)
-        else:
-            if not processed:
-                log.info("consumer.duplicate_skipped", event_id=str(event.event_id))
+        recording_id = event.payload.get("recording_id")
+        if recording_id:
+            structlog.contextvars.bind_contextvars(recording_id=str(recording_id))
+        started = time.perf_counter()
+        with _tracer.start_as_current_span(
+            f"{event.event_type} process",
+            context=propagate.extract(event.headers),
+            kind=SpanKind.CONSUMER,
+            attributes={
+                "messaging.system": "rabbitmq",
+                "messaging.destination.name": queue,
+                "messaging.message.id": str(event.event_id),
+            },
+        ) as span:
+            try:
+                processed = await self._guard.process(event)
+            except PermanentHandlerError as exc:
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                log.error("consumer.permanent_error", event_id=str(event.event_id), error=str(exc))
+                await self._dead_letter(message, f"permanent error: {exc}")
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, repr(exc)[:200]))
+                log.exception("consumer.handler_failed", event_id=str(event.event_id))
+                await self._retry_or_dead_letter(message, exc)
+            else:
+                if processed:
+                    CONSUMER_MESSAGES.labels(queue, "processed").inc()
+                else:
+                    CONSUMER_MESSAGES.labels(queue, "duplicate").inc()
+                    INBOX_DUPLICATES.labels(queue).inc()
+                    log.info("consumer.duplicate_skipped", event_id=str(event.event_id))
+        CONSUMER_DURATION.labels(queue).observe(time.perf_counter() - started)
         # Ack only after the message is processed or safely republished
         await message.ack()
 
@@ -138,6 +167,7 @@ class RabbitMqConsumer:
             message,
             {RETRY_COUNT_HEADER: attempt + 1, "x-last-error": repr(error)[:500]},
         )
+        CONSUMER_MESSAGES.labels(self._queue.name, "retried").inc()
         log.info("consumer.scheduled_retry", queue=self._queue.name, attempt=attempt + 1)
 
     async def _dead_letter(self, message: AbstractIncomingMessage, reason: str) -> None:
@@ -147,6 +177,7 @@ class RabbitMqConsumer:
             message,
             {"x-dead-letter-reason": reason[:500]},
         )
+        CONSUMER_MESSAGES.labels(self._queue.name, "dead_lettered").inc()
         log.error("consumer.dead_lettered", queue=self._queue.name, reason=reason[:200])
 
     async def _republish(

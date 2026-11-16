@@ -103,6 +103,10 @@ class MinioObjectStorage(ObjectStorage):
             response_headers={"response-content-disposition": f'attachment; filename="{filename}"'},
         )
 
+    async def ping(self) -> None:
+        """Raises if MinIO is unreachable or rejects the credentials."""
+        await asyncio.to_thread(self._internal.bucket_exists, self._buckets[0])
+
 
 def create_object_storage(settings: Settings) -> MinioObjectStorage:
     secret = settings.minio_secret_key.get_secret_value()

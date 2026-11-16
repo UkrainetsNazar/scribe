@@ -1,0 +1,45 @@
+groups:
+  - name: scribe-pipeline
+    rules:
+      - alert: DeadLetterQueueNotEmpty
+        expr: sum by (queue) (rabbitmq_detailed_queue_messages_ready{queue=~".+dlq"}) > 0
+        for: 30s
+        labels: { severity: critical }
+        annotations:
+          summary: "Messages in the dead-letter queue {{ $labels.queue }}"
+          description: "{{ $value }} message(s) could not be processed after all retries."
+
+      - alert: OutboxLagHigh
+        expr: scribe_outbox_lag_seconds > 60
+        for: 30s
+        labels: { severity: critical }
+        annotations:
+          summary: "The oldest unpublished outbox event is {{ $value | humanizeDuration }} old"
+          description: "The relay is not keeping up or the broker is unavailable."
+
+      - alert: PipelineStageFailing
+        expr: increase(scribe_pipeline_stage_runs_total{outcome="failed"}[10m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "Pipeline stage {{ $labels.stage }} failed"
+          description: "A recording moved to the failed state in the last 10 minutes."
+
+  - name: scribe-availability
+    rules:
+      - alert: TargetDown
+        expr: up{job=~"api|ws|relay|consumer|worker|rabbitmq|traefik"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.job }} is down"
+          description: "Prometheus cannot scrape {{ $labels.instance }}."
+
+      - alert: ApiErrorRateHigh
+        expr: >-
+          sum(rate(scribe_http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(scribe_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "More than 5% of API requests fail with 5xx"
+          description: "Current ratio: {{ $value | humanizePercentage }}."

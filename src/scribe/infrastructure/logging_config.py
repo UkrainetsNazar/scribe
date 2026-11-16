@@ -2,11 +2,13 @@ import logging
 import sys
 
 import structlog
+from opentelemetry import trace
 
 
 def configure_logging(level: str = "INFO", json_logs: bool = True) -> None:
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
+        add_trace_context,
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
@@ -43,3 +45,13 @@ def configure_logging(level: str = "INFO", json_logs: bool = True) -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level.upper())
+
+
+def add_trace_context(
+    logger: structlog.types.WrappedLogger, method_name: str, event_dict: structlog.types.EventDict
+) -> structlog.types.EventDict:
+    context = trace.get_current_span().get_span_context()
+    if context.is_valid:
+        event_dict.setdefault("trace_id", format(context.trace_id, "032x"))
+        event_dict.setdefault("span_id", format(context.span_id, "016x"))
+    return event_dict

@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     refresh_token_ttl_days: int = 7
     presigned_url_ttl_min: int = 15
 
+    # Observability
+    service_name: str = "scribe"
+    # OTLP/HTTP base endpoint, e.g. http://jaeger:4318. Tracing is off when it is not set
+    otlp_endpoint: str | None = None
+    # Port of the Prometheus exporter of worker processes (the API serves /metrics itself)
+    metrics_port: int | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

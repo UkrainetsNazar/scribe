@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func, select, update
@@ -61,6 +62,14 @@ class SqlAlchemyOutboxRepository:
             .values(published_at=func.now())
             .execution_options(synchronize_session=False)
         )
+
+    async def stats(self) -> tuple[int, datetime | None]:
+        """Number of unpublished events and the creation time of the oldest one."""
+        stmt = select(func.count(), func.min(OutboxEventModel.created_at)).where(
+            OutboxEventModel.published_at.is_(None)
+        )
+        count, oldest = (await self._session.execute(stmt)).one()
+        return int(count), oldest
 
 
 class SqlAlchemyInboxRepository(InboxRepository):

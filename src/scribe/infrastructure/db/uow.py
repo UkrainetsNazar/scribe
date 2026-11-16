@@ -1,7 +1,6 @@
 from types import TracebackType
-from typing import Any, Self
+from typing import Self
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from scribe.application.interfaces import UnitOfWork
@@ -21,11 +20,7 @@ from scribe.infrastructure.db.repositories import (
     SqlAlchemyPlanRepository,
     SqlAlchemyUserRepository,
 )
-
-
-def _trace_headers() -> dict[str, Any]:
-    trace_id = structlog.contextvars.get_contextvars().get("trace_id")
-    return {"trace_id": trace_id} if trace_id else {}
+from scribe.infrastructure.telemetry import trace_headers
 
 
 class SqlAlchemyUnitOfWork(UnitOfWork):
@@ -67,8 +62,9 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
             self._session = None
 
     async def commit(self) -> None:
-        # Transactional Outbox: events are stored in the same transaction as the aggregate
-        headers = _trace_headers()
+        # Transactional Outbox: events are stored in the same transaction as the aggregate,
+        # together with the trace context of whatever produced them (request or pipeline stage)
+        headers = trace_headers()
         await self.outbox.add_many([to_outbox_record(e, headers) for e in self.events])
         await self.session.commit()
         self.events.clear()
