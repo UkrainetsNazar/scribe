@@ -19,10 +19,31 @@ SUBSCRIBE_TIMEOUT_SEC = 5.0
 
 # Atomic "store the state and broadcast it, unless a newer state is already stored".
 # KEYS: state key, channel. ARGV: JSON message, TTL in seconds.
+#
+# Order within one run: status < progress < final state. Between two progress messages the
+# position (stage, attempt of that stage, percent) decides: a late message can never move the
+# state back, but a retried stage may start again from 0 in a later attempt.
+# The first final state (completed / failed / cancelled) of a run wins.
 _STORE_AND_PUBLISH = """
 local ranks = {status = 0, progress = 1, completed = 2, failed = 2, cancelled = 2}
+local stages = {extract_audio = 0, normalize_and_chunk = 1, transcribe = 2,
+                build_subtitles = 3, summarize = 4, index = 5}
+
 local function rank(message)
   return ranks[message.type] or 1
+end
+
+local function position(message)
+  return {stages[message.stage] or 0, message.attempt or 1, message.percent or 0}
+end
+
+local function is_older(a, b)
+  for i = 1, 3 do
+    if a[i] ~= b[i] then
+      return a[i] < b[i]
+    end
+  end
+  return false
 end
 
 local incoming = cjson.decode(ARGV[1])
@@ -31,9 +52,22 @@ if current then
   local stored = cjson.decode(current)
   local stored_run = stored.run or 0
   local incoming_run = incoming.run or 0
-  if incoming_run < stored_run
-      or (incoming_run == stored_run and rank(incoming) < rank(stored)) then
+  if incoming_run < stored_run then
     return 0
+  end
+  if incoming_run == stored_run then
+    local incoming_rank = rank(incoming)
+    local stored_rank = rank(stored)
+    if incoming_rank < stored_rank then
+      return 0
+    end
+    if incoming_rank == 2 and stored_rank == 2 then
+      return 0
+    end
+    if incoming_rank == 1 and stored_rank == 1
+        and is_older(position(incoming), position(stored)) then
+      return 0
+    end
   end
 end
 redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))

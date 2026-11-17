@@ -78,13 +78,22 @@ async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
 
 async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)
+    if any(err.get("type") == "json_invalid" for err in exc.errors()):
+        http_status, title = PROBLEMS["BAD_REQUEST"]
+        return _problem(
+            request,
+            status=http_status,
+            code="BAD_REQUEST",
+            title=title,
+            detail="Request body is not valid JSON",
+        )
     errors = [
         {"loc": [str(part) for part in err["loc"]], "msg": err["msg"]} for err in exc.errors()
     ]
-    status, title = PROBLEMS["VALIDATION_ERROR"]
+    http_status, title = PROBLEMS["VALIDATION_ERROR"]
     return _problem(
         request,
-        status=status,
+        status=http_status,
         code="VALIDATION_ERROR",
         title=title,
         detail="Request validation failed",

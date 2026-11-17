@@ -27,20 +27,119 @@ MAX_FILE_BYTES = 2 * 1024**3
 MAX_DURATION_SEC = 4 * 60 * 60
 MAX_TITLE_LENGTH = 200
 
-ALLOWED_CONTENT_TYPES = frozenset(
+INPUT_FORMATS: dict[str, str] = {
+    "audio/mpeg": "mp3",
+    "audio/wav": "wav",
+    "audio/mp4": "mov",
+    "audio/ogg": "ogg",
+    "audio/flac": "flac",
+    "video/mp4": "mov",
+    "video/webm": "matroska",
+    "video/quicktime": "mov",
+}
+ALLOWED_CONTENT_TYPES = frozenset(INPUT_FORMATS)
+SUPPORTED_LANGUAGES = frozenset(
     {
-        "audio/mpeg",
-        "audio/wav",
-        "audio/mp4",
-        "audio/ogg",
-        "audio/flac",
-        "video/mp4",
-        "video/webm",
-        "video/quicktime",
+        "af",
+        "am",
+        "ar",
+        "as",
+        "az",
+        "ba",
+        "be",
+        "bg",
+        "bn",
+        "bo",
+        "br",
+        "bs",
+        "ca",
+        "cs",
+        "cy",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "et",
+        "eu",
+        "fa",
+        "fi",
+        "fo",
+        "fr",
+        "gl",
+        "gu",
+        "ha",
+        "he",
+        "hi",
+        "hr",
+        "ht",
+        "hu",
+        "hy",
+        "id",
+        "is",
+        "it",
+        "ja",
+        "jw",
+        "ka",
+        "kk",
+        "km",
+        "kn",
+        "ko",
+        "la",
+        "lb",
+        "ln",
+        "lo",
+        "lt",
+        "lv",
+        "mg",
+        "mi",
+        "mk",
+        "ml",
+        "mn",
+        "mr",
+        "ms",
+        "mt",
+        "my",
+        "ne",
+        "nl",
+        "nn",
+        "no",
+        "oc",
+        "pa",
+        "pl",
+        "ps",
+        "pt",
+        "ro",
+        "ru",
+        "sa",
+        "sd",
+        "si",
+        "sk",
+        "sl",
+        "sn",
+        "so",
+        "sq",
+        "sr",
+        "su",
+        "sv",
+        "sw",
+        "ta",
+        "te",
+        "tg",
+        "th",
+        "tk",
+        "tl",
+        "tr",
+        "tt",
+        "uk",
+        "ur",
+        "uz",
+        "vi",
+        "yi",
+        "yo",
+        "zh",
     }
 )
-
-_LANGUAGE_RE = re.compile(r"[a-z]{2}")
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -124,8 +223,8 @@ class Recording:
                 f"File exceeds the {plan.max_file_mb} MB limit of the '{plan.name}' plan"
             )
         language = language.strip().lower()
-        if language != "auto" and not _LANGUAGE_RE.fullmatch(language):
-            raise DomainValidationError("language must be 'auto' or an ISO 639-1 code")
+        if language != "auto" and language not in SUPPORTED_LANGUAGES:
+            raise DomainValidationError("language must be 'auto' or a supported ISO 639-1 code")
 
         recording_id = uuid4()
         recording = cls(

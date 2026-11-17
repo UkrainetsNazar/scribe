@@ -17,11 +17,19 @@ class FfmpegAudioProcessor(AudioProcessor):
         self._binary = binary
         self._timeout = timeout_sec
 
-    async def extract_audio(self, source: Path, target: Path) -> None:
-        await self._run("-i", str(source), "-map", "0:a:0", "-vn", "-c:a", "flac", str(target))
+    async def extract_audio(self, source: Path, target: Path, input_format: str) -> None:
+        await self._run(
+            "-protocol_whitelist", "file",
+            "-f", input_format,
+            "-i", str(source),
+            "-map", "0:a:0", "-vn", "-c:a", "flac",
+            str(target),
+        )  # fmt: skip
 
     async def split_into_chunks(self, source: Path, out_dir: Path, chunk_sec: int) -> list[Path]:
         await self._run(
+            "-protocol_whitelist", "file",
+            "-f", "flac",
             "-i", str(source),
             "-vn",
             "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",

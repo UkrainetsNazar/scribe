@@ -18,6 +18,7 @@ from scribe.domain.pipeline import (
     CHUNK_MANIFEST,
     EXTRACTED_AUDIO,
     SEGMENTS,
+    SOURCE_COPY,
     SUBTITLES_SRT,
     SUBTITLES_VTT,
     SUMMARY,
@@ -27,7 +28,7 @@ from scribe.domain.pipeline import (
     chunk_name,
     chunk_transcript_name,
 )
-from scribe.domain.recordings import Recording
+from scribe.domain.recordings import INPUT_FORMATS, Recording
 from scribe.domain.subtitles import to_srt, to_vtt
 from scribe.domain.transcript import Segment, Summary, Transcription
 
@@ -66,27 +67,22 @@ class ExtractAudioHandler(_ArtifactHandler):
     name = StageName.EXTRACT_AUDIO
 
     def __init__(
-        self,
-        storage: ObjectStorage,
-        audio: AudioProcessor,
-        uploads_bucket: str,
-        artifacts_bucket: str,
+        self, storage: ObjectStorage, audio: AudioProcessor, artifacts_bucket: str
     ) -> None:
         super().__init__(storage, artifacts_bucket)
         self._audio = audio
-        self._uploads = uploads_bucket
 
     async def execute(self, ctx: StageContext) -> StageResult | None:
         recording = ctx.recording
+        input_format = INPUT_FORMATS.get(recording.content_type)
+        if input_format is None:
+            raise PermanentStageError(f"Unsupported content type '{recording.content_type}'")
         with tempfile.TemporaryDirectory(prefix="scribe-") as tmp:
             source = Path(tmp) / "source"
-            try:
-                await self._storage.download_file(self._uploads, recording.storage_key, source)
-            except FileNotFoundError as exc:
-                raise PermanentStageError("Uploaded file is missing") from exc
+            await self._download(recording, SOURCE_COPY, source)
             await ctx.progress(30)
             extracted = Path(tmp) / "extracted.flac"
-            await self._audio.extract_audio(source, extracted)
+            await self._audio.extract_audio(source, extracted, input_format)
             await ctx.progress(80)
             await self._storage.upload_file(
                 self._artifacts, self._key(recording, EXTRACTED_AUDIO), extracted, "audio/flac"

@@ -65,6 +65,9 @@ class ProjectModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    webhook_url: Mapped[str | None] = mapped_column(String(2048))
+    webhook_secret: Mapped[str | None] = mapped_column(String(100))
+
 
 class RecordingModel(Base):
     __tablename__ = "recordings"

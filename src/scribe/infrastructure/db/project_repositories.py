@@ -19,6 +19,8 @@ def _to_domain(m: ProjectModel) -> Project:
         description=m.description,
         created_at=m.created_at,
         deleted_at=m.deleted_at,
+        webhook_url=m.webhook_url,
+        webhook_secret=m.webhook_secret,
     )
 
 
@@ -35,6 +37,8 @@ class SqlAlchemyProjectRepository(ProjectRepository):
                 description=project.description,
                 created_at=project.created_at,
                 deleted_at=project.deleted_at,
+                webhook_url=project.webhook_url,
+                webhook_secret=project.webhook_secret,
             )
         )
         try:
@@ -90,6 +94,8 @@ class SqlAlchemyProjectRepository(ProjectRepository):
                 name=project.name,
                 description=project.description,
                 deleted_at=project.deleted_at,
+                webhook_url=project.webhook_url,
+                webhook_secret=project.webhook_secret,
             )
         )
         try:

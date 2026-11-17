@@ -1,10 +1,11 @@
+from collections.abc import Sequence
 from uuid import UUID
 
 import structlog
 
 from scribe.application.inbox import EventHandler, InboundEvent, PermanentHandlerError
-from scribe.application.interfaces import UnitOfWork
-from scribe.application.pipeline_ports import PipelineDispatcher
+from scribe.application.interfaces import ObjectStorage, UnitOfWork
+from scribe.application.pipeline_ports import PipelineDispatcher, TranscriptIndex
 from scribe.application.progress import (
     Message,
     ProgressPublisher,
@@ -13,6 +14,8 @@ from scribe.application.progress import (
     failed_message,
     status_message,
 )
+from scribe.application.webhooks import WebhookDelivery, WebhookSender, build_webhook_data
+from scribe.domain.webhooks import webhook_body
 
 log = structlog.get_logger()
 
@@ -72,3 +75,78 @@ class ProgressEventHandler(EventHandler):
                 return cancelled_message(recording_id, run)
             case _:
                 return None
+
+
+class RecordingCleanupHandler(EventHandler):
+    """Reacts to `recording.deleted` (FR-14): removes files, transcript documents and, last,
+    the database rows. Every step is idempotent, so a retry after a failure is safe."""
+
+    def __init__(
+        self, storage: ObjectStorage, index: TranscriptIndex, buckets: Sequence[str]
+    ) -> None:
+        self._storage = storage
+        self._index = index
+        self._buckets = tuple(buckets)
+
+    async def handle(self, event: InboundEvent, uow: UnitOfWork) -> None:
+        try:
+            recording_id = UUID(str(event.payload["recording_id"]))
+            owner_id = UUID(str(event.payload["owner_id"]))
+        except (KeyError, ValueError, TypeError) as exc:
+            raise PermanentHandlerError(f"Malformed recording.deleted payload: {exc!r}") from exc
+        prefix = f"{owner_id}/{recording_id}/"  # sources, artifacts and exports share it
+        files = 0
+        for bucket in self._buckets:
+            files += await self._storage.delete_prefix(bucket, prefix)
+        await self._index.remove(recording_id)
+        row_removed = await uow.recordings.purge(recording_id)
+        log.info(
+            "recording.purged", recording_id=str(recording_id), files=files, row_removed=row_removed
+        )
+
+
+class WebhookDeliveryHandler(EventHandler):
+    """Reacts to `recording.completed` and `recording.failed` by calling the project's webhook.
+
+    Delivery is at-least-once: if the inbox commit fails after a successful call, the event is
+    redelivered and the webhook is sent again with the same X-Scribe-Delivery id."""
+
+    def __init__(self, sender: WebhookSender) -> None:
+        self._sender = sender
+
+    async def handle(self, event: InboundEvent, uow: UnitOfWork) -> None:
+        try:
+            recording_id = UUID(str(event.payload["recording_id"]))
+            owner_id = UUID(str(event.payload["owner_id"]))
+        except (KeyError, ValueError, TypeError) as exc:
+            raise PermanentHandlerError(f"Malformed {event.event_type} payload: {exc!r}") from exc
+
+        recording = await uow.recordings.get(recording_id, owner_id)
+        if recording is None:  # deleted in the meantime
+            return
+        project = await uow.projects.get(recording.project_id, owner_id)
+        if project is None or not project.webhook_url or not project.webhook_secret:
+            return  # no webhook configured
+
+        body = webhook_body(
+            event.event_id,
+            event.event_type,
+            str(event.payload.get("occurred_at", "")),
+            build_webhook_data(event.event_type, event.payload, recording),
+        )
+        await self._sender.send(
+            WebhookDelivery(
+                url=project.webhook_url,
+                secret=project.webhook_secret,
+                event_id=event.event_id,
+                event_type=event.event_type,
+                body=body,
+            )
+        )
+        # The URL is not logged: it may contain a token
+        log.info(
+            "webhook.delivered",
+            recording_id=str(recording_id),
+            event_type=event.event_type,
+            event_id=str(event.event_id),
+        )

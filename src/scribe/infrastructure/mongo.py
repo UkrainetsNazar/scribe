@@ -1,4 +1,3 @@
-from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -95,6 +94,12 @@ class MongoTranscriptIndex(TranscriptIndex):
                 upsert=True,
             )
 
+    async def remove(self, recording_id: UUID) -> None:
+        rid = str(recording_id)
+        await self._segments.delete_many({"recording_id": rid})
+        await self._transcripts.delete_many({"recording_id": rid})
+        await self._summaries.delete_many({"recording_id": rid})
+
 
 class MongoTranscriptReader(TranscriptReader):
     def __init__(self, db: Db) -> None:
@@ -133,22 +138,16 @@ class MongoTranscriptReader(TranscriptReader):
         doc = await self._summaries.find_one({"recording_id": str(recording_id)})
         return Summary.from_dict(doc) if doc else None
 
-    async def search(
-        self, owner_id: UUID, query: str, recording_ids: Sequence[UUID], limit: int
-    ) -> list[SearchHit]:
-        if not recording_ids:
-            return []
+    async def search(self, owner_id: UUID, query: str, *, skip: int, limit: int) -> list[SearchHit]:
         await self._ensure_indexes()
         cursor = (
             self._segments.find(
-                {
-                    "$text": {"$search": query},
-                    "owner_id": str(owner_id),
-                    "recording_id": {"$in": [str(r) for r in recording_ids]},
-                },
+                {"$text": {"$search": query}, "owner_id": str(owner_id)},
                 {"score": {"$meta": "textScore"}},
             )
-            .sort([("score", {"$meta": "textScore"})])
+            # _id breaks ties, so paging with skip is stable
+            .sort([("score", {"$meta": "textScore"}), ("_id", 1)])
+            .skip(skip)
             .limit(limit)
         )
         return [

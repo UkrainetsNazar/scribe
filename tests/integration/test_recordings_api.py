@@ -2,10 +2,14 @@ import asyncio
 import io
 import os
 import wave
+from uuid import UUID
 
 import httpx
 import pytest
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from scribe.infrastructure.db.models import OutboxEventModel, RecordingModel
 from tests.integration.helpers import API, auth_headers, missing_tool
 
 pytestmark = pytest.mark.integration
@@ -93,7 +97,9 @@ async def test_full_upload_flow(api_client: httpx.AsyncClient) -> None:
 
 
 @requires_ffprobe
-async def test_concurrent_complete_upload_is_safe(api_client: httpx.AsyncClient) -> None:
+async def test_concurrent_complete_upload_is_safe(
+    api_client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
     headers = await auth_headers(api_client)
     recording_id = await _recording_with_upload(api_client, headers, make_wav())
     url = f"{API}/recordings/{recording_id}/complete-upload"
@@ -103,6 +109,22 @@ async def test_concurrent_complete_upload_is_safe(api_client: httpx.AsyncClient)
     )
     assert first.status_code == second.status_code == 202
     assert first.json()["status"] == second.json()["status"] == "processing"
+
+    async with session_factory() as session:
+        run = await session.scalar(
+            select(RecordingModel.run).where(RecordingModel.id == UUID(recording_id))
+        )
+        requested = await session.scalar(
+            select(func.count())
+            .select_from(OutboxEventModel)
+            .where(
+                OutboxEventModel.aggregate_id == UUID(recording_id),
+                OutboxEventModel.event_type == "recording.processing_requested",
+            )
+        )
+    assert (run, requested) == (1, 1)  # one run and one event, not two
+    me = await api_client.get(f"{API}/users/me", headers=headers)
+    assert me.json()["minutes_used"] == 1  # charged once
 
 
 async def test_complete_before_upload_keeps_state(api_client: httpx.AsyncClient) -> None:

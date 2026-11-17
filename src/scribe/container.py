@@ -36,6 +36,12 @@ from scribe.application.use_cases.recordings import (
 )
 from scribe.application.use_cases.results import GetSummary, GetTranscript, SearchTranscripts
 from scribe.application.use_cases.usage import GetMonthlyUsage
+from scribe.application.use_cases.webhooks import (
+    ConfigureWebhook,
+    DeleteWebhook,
+    GetWebhook,
+    RotateWebhookSecret,
+)
 from scribe.config import Settings
 from scribe.infrastructure.celery_dispatcher import CeleryPipelineDispatcher
 from scribe.infrastructure.db.session import create_engine, create_session_factory
@@ -61,6 +67,7 @@ from scribe.infrastructure.storage.minio_storage import create_object_storage
 from scribe.infrastructure.summarization.extractive import ExtractiveSummarizer
 from scribe.infrastructure.transcription.stub import StubTranscriber
 from scribe.infrastructure.transcription.whisper import FasterWhisperTranscriber
+from scribe.infrastructure.webhook_sender import HttpxWebhookSender
 
 
 class Container(containers.DeclarativeContainer):
@@ -151,7 +158,6 @@ class Container(containers.DeclarativeContainer):
         ExtractAudioHandler,
         storage=object_storage,
         audio=audio_processor,
-        uploads_bucket=settings.provided.minio_bucket_uploads,
         artifacts_bucket=settings.provided.minio_bucket_artifacts,
     )
     normalize_handler = providers.Factory(
@@ -240,7 +246,8 @@ class Container(containers.DeclarativeContainer):
         uow_factory=uow.provider,
         storage=object_storage,
         probe=media_probe,
-        bucket=settings.provided.minio_bucket_uploads,
+        uploads_bucket=settings.provided.minio_bucket_uploads,
+        artifacts_bucket=settings.provided.minio_bucket_artifacts,
     )
     retry_recording = providers.Factory(RetryRecording, uow_factory=uow.provider)
     cancel_recording = providers.Factory(CancelRecording, uow_factory=uow.provider)
@@ -271,3 +278,14 @@ class Container(containers.DeclarativeContainer):
         bucket=settings.provided.minio_bucket_exports,
         ttl_min=settings.provided.presigned_url_ttl_min,
     )
+
+    # ── Webhooks ──
+    webhook_sender = providers.Singleton(
+        HttpxWebhookSender,
+        timeout_sec=settings.provided.webhook_timeout_sec,
+        allow_private_networks=settings.provided.webhook_allow_private_networks,
+    )
+    configure_webhook = providers.Factory(ConfigureWebhook, uow_factory=uow.provider)
+    get_webhook = providers.Factory(GetWebhook, uow_factory=uow.provider)
+    rotate_webhook_secret = providers.Factory(RotateWebhookSecret, uow_factory=uow.provider)
+    delete_webhook = providers.Factory(DeleteWebhook, uow_factory=uow.provider)

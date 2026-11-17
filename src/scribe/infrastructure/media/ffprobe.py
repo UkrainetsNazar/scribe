@@ -6,6 +6,7 @@ import structlog
 
 from scribe.application.interfaces import MediaInfo, MediaProbe
 from scribe.domain.errors import DependencyUnavailableError, InvalidMediaError
+from scribe.domain.recordings import INPUT_FORMATS
 
 log = structlog.get_logger()
 
@@ -15,7 +16,10 @@ class FfprobeMediaProbe(MediaProbe):
         self._binary = binary
         self._timeout = timeout_sec
 
-    async def probe(self, source_url: str) -> MediaInfo:
+    async def probe(self, source_url: str, content_type: str) -> MediaInfo:
+        input_format = INPUT_FORMATS.get(content_type)
+        if input_format is None:
+            raise InvalidMediaError(f"Unsupported content type '{content_type}'")
         try:
             proc = await asyncio.create_subprocess_exec(
                 self._binary,
@@ -25,8 +29,13 @@ class FfprobeMediaProbe(MediaProbe):
                 "json",
                 "-show_format",
                 "-show_streams",
+                # Only what is needed to read the presigned URL; nested URLs are never followed
                 "-protocol_whitelist",
-                "http,https,tcp,tls,crypto",
+                "http,https,tcp,tls",
+                # The demuxer comes from the declared content type, never from the file itself:
+                # otherwise a playlist uploaded as "audio/wav" makes ffprobe fetch its URLs
+                "-f",
+                input_format,
                 source_url,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

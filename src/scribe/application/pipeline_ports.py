@@ -7,8 +7,9 @@ from scribe.domain.transcript import Summary, Transcription
 
 class AudioProcessor(ABC):
     @abstractmethod
-    async def extract_audio(self, source: Path, target: Path) -> None:
-        """Extracts the first audio track losslessly. Raises PermanentStageError."""
+    async def extract_audio(self, source: Path, target: Path, input_format: str) -> None:
+        """Extracts the first audio track losslessly. `input_format` is the forced demuxer.
+        Raises PermanentStageError."""
 
     @abstractmethod
     async def split_into_chunks(self, source: Path, out_dir: Path, chunk_sec: int) -> list[Path]:
@@ -41,6 +42,10 @@ class TranscriptIndex(ABC):
         summary: Summary | None,
     ) -> None:
         """Idempotent: a repeated call for the same recording replaces its documents."""
+
+    @abstractmethod
+    async def remove(self, recording_id: UUID) -> None:
+        """Deletes every document of the recording. Idempotent."""
 
 
 class PipelineDispatcher(ABC):

@@ -79,6 +79,7 @@ def test_safe_filename(raw: str, expected: str) -> None:
         ({"language": "ukr"}, DomainValidationError),
         ({"title": "   "}, DomainValidationError),
         ({"title": "x" * 201}, DomainValidationError),
+        ({"language": "zz"}, DomainValidationError),
     ],
 )
 def test_create_validation(overrides: dict[str, Any], error: type[Exception]) -> None:

@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -34,7 +33,6 @@ class TranscriptReader(ABC):
     async def get_summary(self, recording_id: UUID) -> Summary | None: ...
 
     @abstractmethod
-    async def search(
-        self, owner_id: UUID, query: str, recording_ids: Sequence[UUID], limit: int
-    ) -> list[SearchHit]:
-        """Best matches first. Only the given recordings are searched."""
+    async def search(self, owner_id: UUID, query: str, *, skip: int, limit: int) -> list[SearchHit]:
+        """Best matches first across all recordings of the owner. The caller drops the hits of
+        recordings that must not be visible (not completed, deleted, another project)."""

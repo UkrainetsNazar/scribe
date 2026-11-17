@@ -5,9 +5,11 @@ from datetime import timedelta
 from pathlib import Path
 
 from minio import Minio
+from minio.commonconfig import CopySource
+from minio.deleteobjects import DeleteObject
 from minio.error import S3Error
 
-from scribe.application.interfaces import ObjectStorage, StoredObject
+from scribe.application.interfaces import ObjectModifiedError, ObjectStorage, StoredObject
 from scribe.config import Settings
 
 _PUBLIC_REGION = "us-east-1"
@@ -48,7 +50,27 @@ class MinioObjectStorage(ObjectStorage):
             if exc.code in _MISSING_CODES:
                 return None
             raise
-        return StoredObject(size=info.size or 0, content_type=info.content_type)
+        return StoredObject(
+            size=info.size or 0, content_type=info.content_type, etag=info.etag or ""
+        )
+
+    async def copy(
+        self, src_bucket: str, src_key: str, dst_bucket: str, dst_key: str, *, expected_etag: str
+    ) -> None:
+        await asyncio.to_thread(self._copy, src_bucket, src_key, dst_bucket, dst_key, expected_etag)
+
+    def _copy(
+        self, src_bucket: str, src_key: str, dst_bucket: str, dst_key: str, expected_etag: str
+    ) -> None:
+        source = CopySource(src_bucket, src_key, match_etag=expected_etag)
+        try:
+            self._internal.copy_object(dst_bucket, dst_key, source)
+        except S3Error as exc:
+            if exc.code == "PreconditionFailed":
+                raise ObjectModifiedError(src_key) from exc
+            if exc.code in _MISSING_CODES:
+                raise FileNotFoundError(src_key) from exc
+            raise
 
     async def upload_file(self, bucket: str, key: str, path: Path, content_type: str) -> None:
         await asyncio.to_thread(
@@ -106,6 +128,26 @@ class MinioObjectStorage(ObjectStorage):
     async def ping(self) -> None:
         """Raises if MinIO is unreachable or rejects the credentials."""
         await asyncio.to_thread(self._internal.bucket_exists, self._buckets[0])
+
+    async def delete_prefix(self, bucket: str, prefix: str) -> int:
+        return await asyncio.to_thread(self._delete_prefix, bucket, prefix)
+
+    def _delete_prefix(self, bucket: str, prefix: str) -> int:
+        try:
+            names = [
+                obj.object_name
+                for obj in self._internal.list_objects(bucket, prefix=prefix, recursive=True)
+                if obj.object_name
+            ]
+        except S3Error as exc:
+            if exc.code in _MISSING_CODES:
+                return 0
+            raise
+        # remove_objects is lazy: the errors must be consumed for the deletion to happen
+        errors = list(self._internal.remove_objects(bucket, [DeleteObject(n) for n in names]))
+        if errors:
+            raise RuntimeError(f"Could not delete {len(errors)} object(s) under '{prefix}'")
+        return len(names)
 
 
 def create_object_storage(settings: Settings) -> MinioObjectStorage:

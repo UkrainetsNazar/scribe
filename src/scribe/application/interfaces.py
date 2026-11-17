@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -77,10 +77,15 @@ class RecordingRepository(ABC):
         """Returns up to limit + 1 rows, newest first."""
 
     @abstractmethod
-    async def list_completed_ids(
-        self, owner_id: UUID, project_id: UUID | None, limit: int
-    ) -> list[UUID]:
-        """Ids of completed, non-deleted recordings, newest first."""
+    async def filter_visible_ids(
+        self, owner_id: UUID, recording_ids: Collection[UUID], project_id: UUID | None
+    ) -> set[UUID]:
+        """The given ids that belong to the owner, are completed and (optionally) in the project."""
+
+    @abstractmethod
+    async def purge(self, recording_id: UUID) -> bool:
+        """Permanently removes a recording that is already marked deleted. Its stages and
+        exports go with it (ON DELETE CASCADE). False if there was nothing to remove."""
 
     @abstractmethod
     async def save(self, recording: Recording) -> None: ...
@@ -220,10 +225,15 @@ class RefreshTokenStore(ABC):
 # ── Storage and media ────────────────────────────────────────────────────────
 
 
+class ObjectModifiedError(Exception):
+    """The object changed after it had been checked (its ETag no longer matches)."""
+
+
 @dataclass(frozen=True, slots=True)
 class StoredObject:
     size: int
     content_type: str | None
+    etag: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,8 +277,19 @@ class ObjectStorage(ABC):
     ) -> str:
         """Presigned GET URL for clients; the browser saves the file as `filename`."""
 
+    @abstractmethod
+    async def delete_prefix(self, bucket: str, prefix: str) -> int:
+        """Deletes every object whose key starts with `prefix`. Returns how many were removed."""
+
+    @abstractmethod
+    async def copy(
+        self, src_bucket: str, src_key: str, dst_bucket: str, dst_key: str, *, expected_etag: str
+    ) -> None:
+        """Server-side copy of exactly the version with this ETag.
+        Raises ObjectModifiedError if the source changed, FileNotFoundError if it is gone."""
+
 
 class MediaProbe(ABC):
     @abstractmethod
-    async def probe(self, source_url: str) -> MediaInfo:
+    async def probe(self, source_url: str, content_type: str) -> MediaInfo:
         """Raises InvalidMediaError if the file is not valid media with an audio track."""

@@ -45,6 +45,7 @@ SEGMENTS = "transcript/segments.json"
 SUBTITLES_SRT = "subtitles/subtitles.srt"
 SUBTITLES_VTT = "subtitles/subtitles.vtt"
 SUMMARY = "summary/summary.json"
+SOURCE_COPY = "source/original"
 
 
 def chunk_name(index: int) -> str:

@@ -51,8 +51,10 @@ class StageRunner:
     """Runs one stage and keeps stage rows and the recording state consistent.
 
     Handlers run outside any transaction (they can take minutes); state changes happen in
-    short transactions before and after. Every stage is idempotent, so a repeated execution
-    (redelivery after a worker crash) is safe. Progress is published after each commit.
+    short transactions before and after. Every transaction that changes a stage first takes the
+    row lock of the recording, the same lock cancel and retry take: a task of an older run
+    can never touch the stages of a newer one. Every stage is idempotent, so a repeated
+    execution (redelivery after a worker crash) is safe. Progress is published after each commit.
     """
 
     def __init__(
@@ -73,7 +75,7 @@ class StageRunner:
             raise PermanentStageError(f"No handler registered for stage '{stage_name}'")
 
         async with self._uow_factory() as uow:
-            recording = await uow.recordings.get(recording_id, owner_id)
+            recording = await uow.recordings.get(recording_id, owner_id, for_update=True)
             if not _is_current(recording, run):
                 return StageOutcome.SKIPPED
             stage = await uow.stages.get(recording_id, stage_name)
@@ -84,7 +86,8 @@ class StageRunner:
             stage.start()
             await uow.stages.save(stage)
             await uow.commit()
-        await self._emit_progress(recording_id, run, stage_name, 0)
+            attempt = stage.attempts
+        await self._emit_progress(recording_id, run, stage_name, 0, attempt)
 
         async def report(percent: int) -> None:
             await self._report_progress(recording_id, owner_id, run, stage_name, percent)
@@ -114,17 +117,17 @@ class StageRunner:
         return True
 
     async def _emit_progress(
-        self, recording_id: UUID, run: int, stage_name: StageName, percent: int
+        self, recording_id: UUID, run: int, stage_name: StageName, percent: int, attempt: int
     ) -> None:
         await self._events.publish_state(
-            recording_id, progress_message(recording_id, run, stage_name, percent)
+            recording_id, progress_message(recording_id, run, stage_name, percent, attempt)
         )
 
     async def _report_progress(
         self, recording_id: UUID, owner_id: UUID, run: int, stage_name: StageName, percent: int
     ) -> None:
         async with self._uow_factory() as uow:
-            recording = await uow.recordings.get(recording_id, owner_id)
+            recording = await uow.recordings.get(recording_id, owner_id, for_update=True)
             if not _is_current(recording, run):
                 raise StageAborted
             stage = await uow.stages.get(recording_id, stage_name)
@@ -133,7 +136,8 @@ class StageRunner:
             stage.set_progress(percent)
             await uow.stages.save(stage)
             await uow.commit()
-        await self._emit_progress(recording_id, run, stage_name, percent)
+            attempt = stage.attempts
+        await self._emit_progress(recording_id, run, stage_name, percent, attempt)
 
     async def _finish(
         self,
@@ -144,7 +148,6 @@ class StageRunner:
         result: StageResult | None,
     ) -> StageOutcome:
         async with self._uow_factory() as uow:
-            # Row lock: serializes with cancel/retry; a late result of a stale run is dropped
             recording = await uow.recordings.get(recording_id, owner_id, for_update=True)
             if not _is_current(recording, run):
                 return StageOutcome.SKIPPED
@@ -164,5 +167,6 @@ class StageRunner:
             await uow.recordings.save(recording)
             uow.add_events(recording.pull_events())
             await uow.commit()
-        await self._emit_progress(recording_id, run, stage_name, 100)
+            attempt = stage.attempts
+        await self._emit_progress(recording_id, run, stage_name, 100, attempt)
         return StageOutcome.COMPLETED

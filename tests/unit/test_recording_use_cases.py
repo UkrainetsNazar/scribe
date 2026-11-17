@@ -21,7 +21,7 @@ from scribe.domain.errors import (
     UploadMissingError,
 )
 from scribe.domain.events import RecordingCreated, RecordingProcessingRequested
-from scribe.domain.pipeline import PIPELINE_STAGES
+from scribe.domain.pipeline import PIPELINE_STAGES, SOURCE_COPY, artifact_key
 from scribe.domain.projects import Project
 from scribe.domain.quota import usage_period
 from scribe.domain.recordings import MAX_DURATION_SEC, Recording, RecordingStatus
@@ -64,7 +64,7 @@ def create(uow_factory: UnitOfWorkFactory, storage: FakeObjectStorage) -> Create
 def complete(
     uow_factory: UnitOfWorkFactory, storage: FakeObjectStorage, probe: FakeMediaProbe
 ) -> CompleteUpload:
-    return CompleteUpload(uow_factory, storage, probe, BUCKET)
+    return CompleteUpload(uow_factory, storage, probe, BUCKET, "artifacts")
 
 
 async def _create(
@@ -315,3 +315,34 @@ async def test_retry_is_rejected_after_a_rejected_upload(
 
     with pytest.raises(InvalidStateError):  # retry must not bypass the quota check
         await RetryRecording(uow_factory).execute(user.id, recording.id)
+
+
+async def test_complete_validates_and_processes_a_private_copy(
+    create: CreateRecording,
+    complete: CompleteUpload,
+    storage: FakeObjectStorage,
+    probe: FakeMediaProbe,
+    user: User,
+    project: Project,
+) -> None:
+    recording = await _uploaded(create, storage, user, project)
+    await complete.execute(user.id, recording.id)
+    assert ("artifacts", artifact_key(user.id, recording.id, SOURCE_COPY)) in storage.objects
+    assert probe.content_types == ["audio/wav"]  # the demuxer is chosen from the declared type
+
+
+async def test_replacing_the_upload_during_validation_fails_the_recording(
+    create: CreateRecording,
+    complete: CompleteUpload,
+    storage: FakeObjectStorage,
+    user: User,
+    project: Project,
+    db: FakeDb,
+) -> None:
+    recording = await _uploaded(create, storage, user, project)
+    storage.overwrite_before_copy = True
+    with pytest.raises(InvalidMediaError):
+        await complete.execute(user.id, recording.id)
+    assert db.recordings[recording.id].status is RecordingStatus.FAILED
+    assert db.stages == {}
+    assert RecordingProcessingRequested not in {type(e) for e in db.events}

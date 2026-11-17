@@ -25,7 +25,9 @@ PROGRESS_EVENTS = QueueSpec(
         "recording.cancelled",
     ),
 )
-QUEUES = (PIPELINE_START, PROGRESS_EVENTS)
+RECORDING_CLEANUP = QueueSpec("recording.cleanup", ("recording.deleted",))
+WEBHOOK_DELIVERY = QueueSpec("webhook.delivery", ("recording.completed", "recording.failed"))
+QUEUES = (PIPELINE_START, PROGRESS_EVENTS, RECORDING_CLEANUP, WEBHOOK_DELIVERY)
 
 
 @dataclass(frozen=True, slots=True)

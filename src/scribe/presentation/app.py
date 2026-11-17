@@ -20,6 +20,7 @@ from scribe.presentation.routers import (
     recordings,
     results,
     users,
+    webhooks,
     ws,
 )
 
@@ -95,6 +96,7 @@ def create_app(container: Container | None = None) -> FastAPI:
             auth.router,
             users.router,
             projects.router,
+            webhooks.router,
             recordings.router,
             results.router,
         ):

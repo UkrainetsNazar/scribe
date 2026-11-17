@@ -1,6 +1,7 @@
+from collections.abc import Collection
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from scribe.application.interfaces import RecordingRepository
@@ -99,19 +100,28 @@ class SqlAlchemyRecordingRepository(RecordingRepository):
         rows = (await self._session.execute(stmt)).scalars().all()
         return [_to_domain(m) for m in rows]
 
-    async def list_completed_ids(
-        self, owner_id: UUID, project_id: UUID | None, limit: int
-    ) -> list[UUID]:
+    async def filter_visible_ids(
+        self, owner_id: UUID, recording_ids: Collection[UUID], project_id: UUID | None
+    ) -> set[UUID]:
+        if not recording_ids:
+            return set()
         stmt = select(RecordingModel.id).where(
+            RecordingModel.id.in_(list(recording_ids)),
             RecordingModel.owner_id == owner_id,
             RecordingModel.status == RecordingStatus.COMPLETED.value,
         )
         if project_id is not None:
             stmt = stmt.where(RecordingModel.project_id == project_id)
-        stmt = stmt.order_by(RecordingModel.created_at.desc(), RecordingModel.id.desc()).limit(
-            limit
+        return set((await self._session.execute(stmt)).scalars().all())
+
+    async def purge(self, recording_id: UUID) -> bool:
+        result = await self._session.execute(
+            delete(RecordingModel).where(
+                RecordingModel.id == recording_id,
+                RecordingModel.status == RecordingStatus.DELETED.value,
+            )
         )
-        return list((await self._session.execute(stmt)).scalars().all())
+        return bool(result.rowcount)  # type: ignore[attr-defined]
 
     async def save(self, recording: Recording) -> None:
         await self._session.execute(

@@ -12,7 +12,7 @@ from scribe.domain.transcript import Segment, Summary
 MIN_QUERY_LENGTH = 2
 MAX_QUERY_LENGTH = 200
 # A search covers at most this many of the user's newest completed recordings
-SEARCH_MAX_RECORDINGS = 5000
+SEARCH_MAX_SCANNED_HITS = 2000
 
 
 async def require_completed(
@@ -98,16 +98,32 @@ class SearchTranscripts:
         async with self._uow_factory() as uow:
             if project_id is not None and await uow.projects.get(project_id, owner_id) is None:
                 raise NotFoundError("Project not found")
-            recording_ids = await uow.recordings.list_completed_ids(
-                owner_id, project_id, SEARCH_MAX_RECORDINGS
-            )
-        hits = await self._reader.search(owner_id, query, recording_ids, limit)
-        return [
-            SearchResult(
-                recording_id=hit.recording_id,
-                idx=hit.idx,
-                segment=hit.segment,
-                snippet=make_snippet(hit.segment.text, query),
-            )
-            for hit in hits
-        ]
+
+        results: list[SearchResult] = []
+        scanned = 0
+        batch = max(limit * 4, 50)
+        while len(results) < limit and scanned < SEARCH_MAX_SCANNED_HITS:
+            hits = await self._reader.search(owner_id, query, skip=scanned, limit=batch)
+            if not hits:
+                break
+            scanned += len(hits)
+            async with self._uow_factory() as uow:
+                visible = await uow.recordings.filter_visible_ids(
+                    owner_id, {hit.recording_id for hit in hits}, project_id
+                )
+            for hit in hits:
+                if hit.recording_id not in visible:
+                    continue
+                results.append(
+                    SearchResult(
+                        recording_id=hit.recording_id,
+                        idx=hit.idx,
+                        segment=hit.segment,
+                        snippet=make_snippet(hit.segment.text, query),
+                    )
+                )
+                if len(results) == limit:
+                    break
+            if len(hits) < batch:
+                break
+        return results

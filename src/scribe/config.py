@@ -1,8 +1,11 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEV_JWT_SECRET = "dev-only-secret-change-me-in-prod-0123456789"  # noqa: S105
+MIN_JWT_SECRET_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -66,7 +69,7 @@ class Settings(BaseSettings):
     pipeline_max_retries: int = 5
 
     # Security
-    jwt_secret: SecretStr = Field(default=SecretStr("dev-only-secret-change-me-in-prod-0123456789"))
+    jwt_secret: SecretStr = Field(default=SecretStr(DEV_JWT_SECRET))
     jwt_algorithm: str = "HS256"
     access_token_ttl_min: int = 15
     refresh_token_ttl_days: int = 7
@@ -74,10 +77,25 @@ class Settings(BaseSettings):
 
     # Observability
     service_name: str = "scribe"
-    # OTLP/HTTP base endpoint, e.g. http://jaeger:4318. Tracing is off when it is not set
     otlp_endpoint: str | None = None
-    # Port of the Prometheus exporter of worker processes (the API serves /metrics itself)
     metrics_port: int | None = None
+
+    # Webhooks
+    webhook_timeout_sec: float = 10.0
+    webhook_allow_private_networks: bool = False
+
+    @model_validator(mode="after")
+    def _jwt_secret_must_be_private(self) -> Self:
+        """The default is public (it is in the repository): only automated tests may use it."""
+        secret = self.jwt_secret.get_secret_value()
+        if self.app_env != "test" and (
+            secret == DEV_JWT_SECRET or len(secret) < MIN_JWT_SECRET_LENGTH
+        ):
+            raise ValueError(
+                "JWT_SECRET must be a private random value of at least 32 characters "
+                "(generate one with: openssl rand -hex 32)"
+            )
+        return self
 
 
 @lru_cache

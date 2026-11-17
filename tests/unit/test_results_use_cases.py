@@ -184,3 +184,27 @@ async def test_export_requires_a_completed_recording(
     done = _recording(db, reader, ["x"])  # completed, but the artifact is gone
     with pytest.raises(NotFoundError):
         await create.execute(done.owner_id, done.id, ExportFormat.TXT)
+
+
+async def test_search_is_not_limited_to_the_newest_recordings(
+    db: FakeDb, reader: FakeTranscriptReader, uow_factory: UnitOfWorkFactory
+) -> None:
+    owner = uuid4()
+    oldest = _recording(db, reader, ["the needle is here"], owner_id=owner)
+    for _ in range(5100):
+        _recording(db, reader, ["hay"], owner_id=owner)
+
+    found = await SearchTranscripts(uow_factory, reader).execute(owner, "needle", None, 20)
+    assert [r.recording_id for r in found] == [oldest.id]
+
+
+async def test_hits_of_invisible_recordings_do_not_hide_visible_ones(
+    db: FakeDb, reader: FakeTranscriptReader, uow_factory: UnitOfWorkFactory
+) -> None:
+    owner = uuid4()
+    for _ in range(120):
+        _recording(db, reader, ["budget"], owner_id=owner, status=RecordingStatus.PROCESSING)
+    visible = _recording(db, reader, ["budget"], owner_id=owner)
+
+    found = await SearchTranscripts(uow_factory, reader).execute(owner, "budget", None, 1)
+    assert [r.recording_id for r in found] == [visible.id]

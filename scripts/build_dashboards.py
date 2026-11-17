@@ -16,7 +16,9 @@ Target = tuple[str, str]  # (PromQL expression, legend)
 HTTP = "scribe_http_request_duration_seconds"
 STAGE = "scribe_pipeline_stage_duration_seconds"
 CONSUMER = "scribe_consumer_handler_duration_seconds"
-MAIN_QUEUES = 'queue=~"celery.pipeline|pipeline.start|progress.events"'
+MAIN_QUEUES = (
+    'queue=~"celery.pipeline|pipeline.start|progress.events|recording.cleanup|webhook.delivery"'
+)
 
 
 def quantile(q: float, metric: str, by: str = "", selector: str = "", window: str = "5m") -> str:

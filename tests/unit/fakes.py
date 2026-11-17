@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
@@ -11,6 +11,7 @@ from scribe.application.interfaces import (
     ExportRepository,
     MediaInfo,
     MediaProbe,
+    ObjectModifiedError,
     ObjectStorage,
     PasswordHasher,
     PlanRepository,
@@ -28,6 +29,7 @@ from scribe.application.pagination import Cursor
 from scribe.application.pipeline_ports import PipelineDispatcher, Transcriber, TranscriptIndex
 from scribe.application.progress import Message, ProgressPublisher
 from scribe.application.read_ports import IndexedSegment, SearchHit, TranscriptReader
+from scribe.application.webhooks import WebhookDelivery, WebhookSender
 from scribe.domain.errors import EmailTakenError, InvalidMediaError
 from scribe.domain.events import DomainEvent
 from scribe.domain.exports import Export, ExportFormat
@@ -149,17 +151,24 @@ class InMemoryRecordingRepository(RecordingRepository):
         ]
         return _paginate(items, cursor, limit)
 
-    async def list_completed_ids(
-        self, owner_id: UUID, project_id: UUID | None, limit: int
-    ) -> list[UUID]:
-        items = [
-            r
+    async def filter_visible_ids(
+        self, owner_id: UUID, recording_ids: Collection[UUID], project_id: UUID | None
+    ) -> set[UUID]:
+        wanted = set(recording_ids)
+        return {
+            r.id
             for r in self._alive(owner_id)
-            if r.status is RecordingStatus.COMPLETED
+            if r.id in wanted
+            and r.status is RecordingStatus.COMPLETED
             and (project_id is None or r.project_id == project_id)
-        ]
-        items.sort(key=lambda r: (r.created_at, r.id), reverse=True)
-        return [r.id for r in items[:limit]]
+        }
+
+    async def purge(self, recording_id: UUID) -> bool:
+        recording = self._recordings.get(recording_id)
+        if recording is None or recording.status is not RecordingStatus.DELETED:
+            return False
+        del self._recordings[recording_id]
+        return True
 
     async def save(self, recording: Recording) -> None:
         self._recordings[recording.id] = recording
@@ -316,9 +325,10 @@ class FakeObjectStorage(ObjectStorage):
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], StoredObject] = {}
         self.blobs: dict[tuple[str, str], bytes] = {}
+        self.overwrite_before_copy = False
 
-    def put(self, bucket: str, key: str, size: int) -> None:
-        self.objects[(bucket, key)] = StoredObject(size=size, content_type="audio/wav")
+    def put(self, bucket: str, key: str, size: int, etag: str = "etag-1") -> None:
+        self.objects[(bucket, key)] = StoredObject(size=size, content_type="audio/wav", etag=etag)
 
     async def ensure_buckets(self) -> None:
         return None
@@ -352,13 +362,37 @@ class FakeObjectStorage(ObjectStorage):
     ) -> str:
         return f"http://storage.test/download/{bucket}/{key}?name={filename}"
 
+    async def copy(
+        self, src_bucket: str, src_key: str, dst_bucket: str, dst_key: str, *, expected_etag: str
+    ) -> None:
+        source = self.objects.get((src_bucket, src_key))
+        if source is None:
+            raise FileNotFoundError(src_key)
+        if self.overwrite_before_copy:
+            source = StoredObject(
+                size=source.size, content_type=source.content_type, etag="replaced"
+            )
+            self.objects[(src_bucket, src_key)] = source
+        if source.etag != expected_etag:
+            raise ObjectModifiedError(src_key)
+        self.objects[(dst_bucket, dst_key)] = source
+
+    async def delete_prefix(self, bucket: str, prefix: str) -> int:
+        keys = {k for b, k in [*self.blobs, *self.objects] if b == bucket and k.startswith(prefix)}
+        for key in keys:
+            self.blobs.pop((bucket, key), None)
+            self.objects.pop((bucket, key), None)
+        return len(keys)
+
 
 class FakeMediaProbe(MediaProbe):
     def __init__(self, duration_sec: float = 60.0, error: str | None = None) -> None:
         self.duration_sec = duration_sec
         self.error = error
+        self.content_types: list[str] = []
 
-    async def probe(self, source_url: str) -> MediaInfo:
+    async def probe(self, source_url: str, content_type: str) -> MediaInfo:
+        self.content_types.append(content_type)
         if self.error is not None:
             raise InvalidMediaError(self.error)
         return MediaInfo(duration_sec=self.duration_sec)
@@ -411,6 +445,9 @@ class FakeTranscriptIndex(TranscriptIndex):
     ) -> None:
         self.indexed.append((recording_id, transcription, summary))
 
+    async def remove(self, recording_id: UUID) -> None:
+        self.indexed = [item for item in self.indexed if item[0] != recording_id]
+
 
 class FakeDispatcher(PipelineDispatcher):
     def __init__(self) -> None:
@@ -450,14 +487,23 @@ class FakeTranscriptReader(TranscriptReader):
     async def get_summary(self, recording_id: UUID) -> Summary | None:
         return self.summaries.get(recording_id)
 
-    async def search(
-        self, owner_id: UUID, query: str, recording_ids: Sequence[UUID], limit: int
-    ) -> list[SearchHit]:
+    async def search(self, owner_id: UUID, query: str, *, skip: int, limit: int) -> list[SearchHit]:
         terms = query.lower().split()
         hits = [
             SearchHit(recording_id, idx, segment, 1.0)
-            for recording_id in recording_ids
-            for idx, segment in enumerate(self.segments.get(recording_id, []))
+            for recording_id, segments in self.segments.items()
+            for idx, segment in enumerate(segments)
             if any(term in segment.text.lower() for term in terms)
         ]
-        return hits[:limit]
+        return hits[skip : skip + limit]
+
+
+class FakeWebhookSender(WebhookSender):
+    def __init__(self, error: Exception | None = None) -> None:
+        self.sent: list[WebhookDelivery] = []
+        self.error = error
+
+    async def send(self, delivery: WebhookDelivery) -> None:
+        if self.error is not None:
+            raise self.error
+        self.sent.append(delivery)

@@ -4,6 +4,7 @@ from uuid import UUID
 
 from scribe.application.interfaces import (
     MediaProbe,
+    ObjectModifiedError,
     ObjectStorage,
     UnitOfWork,
     UnitOfWorkFactory,
@@ -17,7 +18,7 @@ from scribe.domain.errors import (
     QuotaExceededError,
     UploadMissingError,
 )
-from scribe.domain.pipeline import ProcessingStage
+from scribe.domain.pipeline import SOURCE_COPY, ProcessingStage, artifact_key
 from scribe.domain.quota import ensure_within_quota, usage_period
 from scribe.domain.recordings import MAX_DURATION_SEC, Recording, RecordingStatus
 from scribe.domain.users import User
@@ -86,10 +87,14 @@ class CreateRecording:
 class CompleteUpload:
     """Validates the uploaded file and moves the recording to `processing`.
 
+    The client keeps a valid presigned URL for the upload key, so the object there can still be
+    replaced. The file is therefore copied to a private key (pinned to the ETag that was just
+    checked), and both the validation and the pipeline use that copy.
+
     Missing file: 422 and the state stays `created`, so the client can upload and retry.
-    Invalid file, too long, or quota exceeded: the recording becomes `failed` and the call is 422.
-    Repeated call for a recording that is already processing: returns it unchanged.
-    The minutes are charged once, when processing starts; retry does not charge again.
+    Invalid file, too long, replaced during validation, or quota exceeded: the recording becomes
+    `failed` and the call is 422. Repeated call for a recording that is already processing:
+    returns it unchanged. The minutes are charged once; retry does not charge again.
     """
 
     READ_URL_TTL_SECONDS = 300
@@ -99,12 +104,14 @@ class CompleteUpload:
         uow_factory: UnitOfWorkFactory,
         storage: ObjectStorage,
         probe: MediaProbe,
-        bucket: str,
+        uploads_bucket: str,
+        artifacts_bucket: str,
     ) -> None:
         self._uow_factory = uow_factory
         self._storage = storage
         self._probe = probe
-        self._bucket = bucket
+        self._uploads = uploads_bucket
+        self._artifacts = artifacts_bucket
 
     async def execute(self, owner_id: UUID, recording_id: UUID) -> Recording:
         async with self._uow_factory() as uow:
@@ -117,7 +124,7 @@ class CompleteUpload:
             if recording.status is not RecordingStatus.CREATED:
                 raise InvalidStateError(f"Cannot complete upload in state '{recording.status}'")
 
-            stored = await self._storage.stat(self._bucket, recording.storage_key)
+            stored = await self._storage.stat(self._uploads, recording.storage_key)
             if stored is None:
                 raise UploadMissingError
             user = await uow.users.get_by_id(owner_id)
@@ -132,11 +139,29 @@ class CompleteUpload:
                     InvalidMediaError("Uploaded file size does not match the declared size"),
                 )
 
+            source_key = artifact_key(owner_id, recording.id, SOURCE_COPY)
+            try:
+                await self._storage.copy(
+                    self._uploads,
+                    recording.storage_key,
+                    self._artifacts,
+                    source_key,
+                    expected_etag=stored.etag,
+                )
+            except ObjectModifiedError as exc:
+                raise await self._fail(
+                    uow,
+                    recording,
+                    InvalidMediaError("The uploaded file changed while it was being validated"),
+                ) from exc
+            except FileNotFoundError as exc:  # removed between stat and copy: nothing is saved
+                raise UploadMissingError from exc
+
             read_url = await self._storage.create_internal_read_url(
-                self._bucket, recording.storage_key, self.READ_URL_TTL_SECONDS
+                self._artifacts, source_key, self.READ_URL_TTL_SECONDS
             )
             try:
-                media = await self._probe.probe(read_url)
+                media = await self._probe.probe(read_url, recording.content_type)
             except InvalidMediaError as exc:
                 raise await self._fail(uow, recording, exc) from exc
             if media.duration_sec > MAX_DURATION_SEC:

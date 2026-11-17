@@ -25,7 +25,9 @@ def status_message(recording_id: UUID, run: int, status: str) -> Message:
     return {"type": "status", "recording_id": str(recording_id), "run": run, "status": status}
 
 
-def progress_message(recording_id: UUID, run: int, stage: StageName, percent: int) -> Message:
+def progress_message(
+    recording_id: UUID, run: int, stage: StageName, percent: int, attempt: int = 1
+) -> Message:
     percent = max(0, min(100, percent))
     return {
         "type": "progress",
@@ -34,6 +36,7 @@ def progress_message(recording_id: UUID, run: int, stage: StageName, percent: in
         "stage": stage.value,
         "percent": percent,
         "overall": overall_percent(stage, percent),
+        "attempt": attempt,
     }
 
 
@@ -144,7 +147,9 @@ def snapshot_message(recording: Recording, stages: Sequence[ProcessingStage]) ->
     if status is RecordingStatus.PROCESSING:
         current = next((s for s in stages if s.status is not StageStatus.COMPLETED), None)
         if current is not None:
-            return progress_message(rid, run, current.name, current.progress)
+            return progress_message(
+                rid, run, current.name, current.progress, max(current.attempts, 1)
+            )
     return status_message(rid, run, status.value)
 
 

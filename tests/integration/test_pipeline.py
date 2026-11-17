@@ -25,7 +25,6 @@ requires_ffmpeg = pytest.mark.skipif(
     missing_tool("ffmpeg", "ffprobe"),
     reason="ffmpeg/ffprobe are not installed (brew install ffmpeg)",
 )
-SOURCE_NAME = "standup.wav"  # filename used by _recording_with_upload
 
 
 def _minio(endpoint: str) -> Minio:
@@ -119,7 +118,10 @@ async def test_full_pipeline_completes(
 
 @requires_ffmpeg
 async def test_missing_source_fails_then_retry_succeeds(
-    api_client: httpx.AsyncClient, pipeline_env: None, minio_endpoint: str
+    api_client: httpx.AsyncClient,
+    pipeline_env: None,
+    minio_endpoint: str,
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     headers = await auth_headers(api_client)
     owner_id = await _owner_id(api_client, headers)
@@ -127,20 +129,28 @@ async def test_missing_source_fails_then_retry_succeeds(
     recording_id = await _recording_with_upload(api_client, headers, data)
     await api_client.post(f"{API}/recordings/{recording_id}/complete-upload", headers=headers)
 
-    # The source disappears after validation: a permanent error, no retries
+    # The validated copy disappears after validation: a permanent error, no retries
     storage = _minio(minio_endpoint)
-    source_key = f"{owner_id}/{recording_id}/source/{SOURCE_NAME}"
-    storage.remove_object("uploads", source_key)
+    source_key = f"{owner_id}/{recording_id}/source/original"
+    storage.remove_object("artifacts", source_key)
     await _run_pipeline(recording_id, owner_id, run=1)
 
     body = await _get(api_client, headers, recording_id)
     assert body["status"] == "failed"
     first_stage = body["stages"][0]  # type: ignore[index]
     assert first_stage["status"] == "failed" and "missing" in first_stage["error"]
-    assert first_stage.get("attempts", True)
+    async with session_factory() as session:
+        attempts = await session.scalar(
+            text(
+                "SELECT attempts FROM processing_stages "
+                "WHERE recording_id = :r AND name = 'extract_audio'"
+            ),
+            {"r": uuid.UUID(recording_id)},
+        )
+    assert attempts == 1  # a permanent error is not retried
 
-    # Restore the file and retry: processing resumes with a new run
-    storage.put_object("uploads", source_key, io.BytesIO(data), len(data))
+    # Restore the copy and retry: processing resumes with a new run
+    storage.put_object("artifacts", source_key, io.BytesIO(data), len(data))
     resp = await api_client.post(f"{API}/recordings/{recording_id}/retry", headers=headers)
     assert resp.status_code == 202 and resp.json()["status"] == "processing"
     await _run_pipeline(recording_id, owner_id, run=1)  # a stale run is ignored

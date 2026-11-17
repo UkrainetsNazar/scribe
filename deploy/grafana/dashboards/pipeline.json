@@ -104,7 +104,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_ready{queue=~\"celery.pipeline|pipeline.start|progress.events\"})",
+          "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_ready{queue=~\"celery.pipeline|pipeline.start|progress.events|recording.cleanup|webhook.delivery\"})",
           "legendFormat": "{{queue}}"
         }
       ]

@@ -16,6 +16,7 @@ from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 
 from scribe.application.progress import (
     completed_message,
+    failed_message,
     progress_message,
     segment_message,
     status_message,
@@ -209,3 +210,31 @@ async def test_stored_state_never_goes_backwards(bus: RedisProgressBus) -> None:
 
     await bus.publish_state(rid, status_message(rid, 2, "processing"))  # retry: a new run wins
     assert (await stored())["run"] == 2
+
+
+async def test_progress_within_a_run_is_monotonic_but_a_stage_retry_may_restart(
+    bus: RedisProgressBus,
+) -> None:
+    rid = uuid4()
+
+    async def stored() -> dict[str, Any]:
+        async with bus.subscribe(rid) as subscription:
+            return await subscription.last_state() or {}
+
+    await bus.publish_state(rid, progress_message(rid, 1, StageName.TRANSCRIBE, 90))
+    await bus.publish_state(rid, progress_message(rid, 1, StageName.TRANSCRIBE, 10))  # late
+    assert (await stored())["percent"] == 90
+
+    await bus.publish_state(rid, progress_message(rid, 1, StageName.EXTRACT_AUDIO, 100))  # earlier
+    assert (await stored())["stage"] == "transcribe"
+
+    await bus.publish_state(rid, progress_message(rid, 1, StageName.TRANSCRIBE, 0, attempt=2))
+    state = await stored()
+    assert (state["percent"], state["attempt"]) == (0, 2)  # a retried stage may restart
+
+    await bus.publish_state(rid, progress_message(rid, 1, StageName.BUILD_SUBTITLES, 5))
+    assert (await stored())["stage"] == "build_subtitles"
+
+    await bus.publish_state(rid, failed_message(rid, 1, "build_subtitles", "boom"))
+    await bus.publish_state(rid, completed_message(rid, 1))  # the first final state wins
+    assert (await stored())["type"] == "failed"
