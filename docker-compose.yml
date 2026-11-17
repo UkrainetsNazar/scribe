@@ -113,7 +113,7 @@ services:
     build:
       context: .
       args:
-        EXTRAS: "--extra whisper"
+        EXTRAS: "${WORKER_EXTRAS---extra whisper}"
     command:
       - sh
       - -c

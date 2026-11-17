@@ -20,3 +20,38 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy src
       - run: uv run pytest --cov -n auto
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --dev
+      - name: Configure
+        run: |
+          cp .env.example .env
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
+      - name: Start the stack
+        run: docker compose up -d --build
+      - name: Wait until the gateway reports ready
+        run: |
+          for i in $(seq 1 90); do
+            if curl -fsS localhost:8010/health/ready; then exit 0; fi
+            sleep 2
+          done
+          docker compose ps -a
+          docker compose logs --tail 100
+          exit 1
+      - name: End-to-end tests
+        run: uv run pytest tests/e2e -m e2e -v -s
+      - name: Logs on failure
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --tail 200
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v

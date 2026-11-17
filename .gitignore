@@ -20,3 +20,6 @@ htmlcov/
 
 # VS Code
 .vscode
+
+demo-output/
+load-results*
