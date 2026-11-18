@@ -4,23 +4,33 @@ from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
 
+import structlog
 from minio import Minio
-from minio.commonconfig import CopySource
+from minio.commonconfig import ENABLED, CopySource, Filter
 from minio.deleteobjects import DeleteObject
 from minio.error import S3Error
+from minio.lifecycleconfig import Expiration, LifecycleConfig, Rule
 
 from scribe.application.interfaces import ObjectModifiedError, ObjectStorage, StoredObject
 from scribe.config import Settings
 
+log = structlog.get_logger()
+
+# A presigned PUT stays valid for a while after a recording is deleted, and an upload that is
+# never completed is garbage: uploads expire. The validated private copy lives in `artifacts`.
+UPLOAD_RETENTION_DAYS = 1
 _PUBLIC_REGION = "us-east-1"
 _MISSING_CODES = {"NoSuchKey", "NoSuchObject", "NoSuchBucket"}
 
 
 class MinioObjectStorage(ObjectStorage):
-    def __init__(self, internal: Minio, public: Minio, buckets: Sequence[str]) -> None:
-        self._internal = internal
-        self._public = public
+    def __init__(
+        self, internal: Minio, public: Minio, buckets: Sequence[str], uploads_bucket: str
+    ) -> None:
+        self._internal = internal  # reachable from this process (e.g. minio:9000 in Docker)
+        self._public = public  # reachable from clients; only used for presigning
         self._buckets = tuple(buckets)
+        self._uploads = uploads_bucket
 
     async def ensure_buckets(self) -> None:
         await asyncio.to_thread(self._ensure_buckets)
@@ -29,6 +39,16 @@ class MinioObjectStorage(ObjectStorage):
         for bucket in self._buckets:
             if not self._internal.bucket_exists(bucket):
                 self._internal.make_bucket(bucket)
+        try:
+            rule = Rule(
+                ENABLED,
+                rule_filter=Filter(prefix=""),
+                rule_id="expire-uploads",
+                expiration=Expiration(days=UPLOAD_RETENTION_DAYS),
+            )
+            self._internal.set_bucket_lifecycle(self._uploads, LifecycleConfig([rule]))
+        except S3Error:
+            log.warning("storage.lifecycle_failed", bucket=self._uploads, exc_info=True)
 
     async def create_upload_url(self, bucket: str, key: str, ttl_seconds: int) -> str:
         return await asyncio.to_thread(
@@ -150,7 +170,9 @@ class MinioObjectStorage(ObjectStorage):
         return len(names)
 
 
-def create_object_storage(settings: Settings) -> MinioObjectStorage:
+def create_object_storage(
+    settings: Settings,
+) -> MinioObjectStorage:
     secret = settings.minio_secret_key.get_secret_value()
     internal = Minio(
         settings.minio_endpoint,
@@ -168,6 +190,7 @@ def create_object_storage(settings: Settings) -> MinioObjectStorage:
     return MinioObjectStorage(
         internal,
         public,
+        uploads_bucket=settings.minio_bucket_uploads,
         buckets=[
             settings.minio_bucket_uploads,
             settings.minio_bucket_artifacts,

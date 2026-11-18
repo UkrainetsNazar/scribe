@@ -46,6 +46,9 @@ def configure_logging(level: str = "INFO", json_logs: bool = True) -> None:
     root.addHandler(handler)
     root.setLevel(level.upper())
 
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
 
 def add_trace_context(
     logger: structlog.types.WrappedLogger, method_name: str, event_dict: structlog.types.EventDict

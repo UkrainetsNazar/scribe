@@ -11,7 +11,7 @@ x-app-env: &app-env
   MINIO_PUBLIC_ENDPOINT: localhost:9100
   TRANSCRIBER: ${TRANSCRIBER:-stub}
   OTLP_ENDPOINT: http://jaeger:4318
-  WEBHOOK_ALLOW_PRIVATE_NETWORKS: "true"
+  WEBHOOK_ALLOW_PRIVATE_NETWORKS: ${WEBHOOK_ALLOW_PRIVATE_NETWORKS:-false}
 
 services:
   postgres:
@@ -127,7 +127,7 @@ services:
       SERVICE_NAME: scribe-worker
       METRICS_PORT: "9103"
       PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus-multiproc
-    volumes: [whisper_models:/root/.cache/huggingface]
+    volumes: [whisper_models:/home/scribe/.cache/huggingface]
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }

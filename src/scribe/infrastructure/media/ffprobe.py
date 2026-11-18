@@ -1,6 +1,7 @@
 import asyncio
 import json
 import math
+import re
 
 import structlog
 
@@ -9,6 +10,8 @@ from scribe.domain.errors import DependencyUnavailableError, InvalidMediaError
 from scribe.domain.recordings import INPUT_FORMATS
 
 log = structlog.get_logger()
+
+_URL = re.compile(r"https?://\S+")
 
 
 class FfprobeMediaProbe(MediaProbe):
@@ -51,7 +54,7 @@ class FfprobeMediaProbe(MediaProbe):
             raise InvalidMediaError("Media probing timed out") from exc
 
         if proc.returncode != 0:
-            log.warning("ffprobe.failed", stderr=stderr.decode(errors="replace")[:500])
+            log.warning("ffprobe.failed", stderr=_redact(stderr.decode(errors="replace"))[:500])
             raise InvalidMediaError("File is not a valid audio/video file")
         return _parse(stdout)
 
@@ -74,3 +77,8 @@ def _parse(stdout: bytes) -> MediaInfo:
     if not math.isfinite(duration) or duration <= 0:
         raise InvalidMediaError("Cannot determine media duration")
     return MediaInfo(duration_sec=duration)
+
+
+def _redact(text: str) -> str:
+    """ffprobe repeats the URL it was given in its errors; a presigned URL is a credential."""
+    return _URL.sub("<url>", text)

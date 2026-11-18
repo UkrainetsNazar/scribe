@@ -25,3 +25,8 @@ def test_application_services_publish_no_ports(compose: dict[str, Any]) -> None:
 
 def test_compose_requires_a_jwt_secret(compose: dict[str, Any]) -> None:
     assert str(compose["x-app-env"]["JWT_SECRET"]).startswith("${JWT_SECRET:?")
+
+
+def test_webhooks_cannot_reach_private_networks_by_default(compose: dict[str, Any]) -> None:
+    value = str(compose["x-app-env"]["WEBHOOK_ALLOW_PRIVATE_NETWORKS"])
+    assert value.endswith(":-false}")

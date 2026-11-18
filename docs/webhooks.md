@@ -15,6 +15,8 @@ The secret is shown only by `PUT` and by `POST .../webhook/rotate-secret`; keep 
 the URL keeps the secret. `DELETE .../webhook` turns the notifications off. The URL must be a public
 `http(s)` address without credentials; private, loopback and link-local destinations are refused.
 
+To try webhooks against a receiver on your machine set WEBHOOK_ALLOW_PRIVATE_NETWORKS=true in .env and recreate the consumer
+
 ## The request
 
 `POST` with a JSON body, redirects are not followed, any 2xx answer counts as delivered:
