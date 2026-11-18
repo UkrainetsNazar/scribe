@@ -12,7 +12,7 @@ from opentelemetry import trace
 from opentelemetry.instrumentation.celery import CeleryInstrumentor
 from prometheus_client import CollectorRegistry, multiprocess, start_http_server
 
-from scribe.application.pipeline import StageOutcome
+from scribe.application.pipeline import StageExecutionError, StageOutcome
 from scribe.config import get_settings
 from scribe.domain.pipeline import (
     PIPELINE_STAGES,
@@ -65,10 +65,15 @@ async def _execute(stage: StageName, recording_id: UUID, owner_id: UUID, run: in
 
 
 async def _mark_failed(
-    stage: StageName, recording_id: UUID, owner_id: UUID, run: int, error: str
+    stage: StageName,
+    recording_id: UUID,
+    owner_id: UUID,
+    run: int,
+    error: str,
+    claim: int | None,
 ) -> None:
     async with worker_container() as container:
-        await container.stage_runner().mark_failed(recording_id, owner_id, run, stage, error)
+        await container.stage_runner().mark_failed(recording_id, owner_id, run, stage, error, claim)
 
 
 def _dispatch_next(stage: StageName, recording_id: UUID, owner_id: UUID, run: int) -> None:
@@ -96,6 +101,37 @@ def _record(stage: StageName, outcome: str, started: float) -> None:
     STAGE_DURATION.labels(stage.value, outcome).observe(time.perf_counter() - started)
 
 
+def _handle_failure(
+    task: Any,
+    stage: StageName,
+    recording_id: UUID,
+    owner_id: UUID,
+    run: int,
+    started: float,
+    bound: Any,
+    exc: Exception,
+    claim: int | None,
+) -> str:
+    """Called from an except block. `claim` fences the failure to the execution that raised it."""
+    if isinstance(exc, PermanentStageError):
+        bound.error("pipeline.permanent_error", error=str(exc))
+        asyncio.run(_mark_failed(stage, recording_id, owner_id, run, str(exc), claim))
+        _record(stage, "failed", started)
+        return "failed"
+    retries = int(task.request.retries)
+    if retries >= task.max_retries:
+        bound.exception("pipeline.retries_exhausted")
+        error = f"retries exhausted: {exc!r}"
+        asyncio.run(_mark_failed(stage, recording_id, owner_id, run, error, claim))
+        _dead_letter(stage, recording_id, error)
+        _record(stage, "failed", started)
+        return "failed"
+    countdown = backoff_seconds(retries)
+    bound.warning("pipeline.transient_error", error=repr(exc), retry_in_sec=round(countdown))
+    _record(stage, "retry", started)
+    raise task.retry(exc=exc, countdown=countdown) from exc
+
+
 def _run_stage_task(
     task: Any, stage: StageName, recording_id: UUID, owner_id: UUID, run: int
 ) -> str:
@@ -110,24 +146,12 @@ def _run_stage_task(
             # Also done for ALREADY_DONE: a crash after the commit but before this line
             # would otherwise stall the pipeline
             _dispatch_next(stage, recording_id, owner_id, run)
-    except PermanentStageError as exc:
-        bound.error("pipeline.permanent_error", error=str(exc))
-        asyncio.run(_mark_failed(stage, recording_id, owner_id, run, str(exc)))
-        _record(stage, "failed", started)
-        return "failed"
+    except StageExecutionError as failure:
+        return _handle_failure(
+            task, stage, recording_id, owner_id, run, started, bound, failure.cause, failure.claim
+        )
     except Exception as exc:
-        retries = int(task.request.retries)
-        if retries >= task.max_retries:
-            bound.exception("pipeline.retries_exhausted")
-            error = f"retries exhausted: {exc!r}"
-            asyncio.run(_mark_failed(stage, recording_id, owner_id, run, error))
-            _dead_letter(stage, recording_id, error)
-            _record(stage, "failed", started)
-            return "failed"
-        countdown = backoff_seconds(retries)
-        bound.warning("pipeline.transient_error", error=repr(exc), retry_in_sec=round(countdown))
-        _record(stage, "retry", started)
-        raise task.retry(exc=exc, countdown=countdown) from exc
+        return _handle_failure(task, stage, recording_id, owner_id, run, started, bound, exc, None)
 
     _record(stage, outcome.value, started)
     if outcome is StageOutcome.SKIPPED:

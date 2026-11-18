@@ -7,7 +7,13 @@ from uuid import UUID
 
 import structlog
 
-from scribe.domain.pipeline import ProcessingStage, StageName, StageStatus, overall_percent
+from scribe.domain.pipeline import (
+    PIPELINE_STAGES,
+    ProcessingStage,
+    StageName,
+    StageStatus,
+    overall_percent,
+)
 from scribe.domain.recordings import Recording, RecordingStatus
 from scribe.domain.transcript import Segment
 
@@ -16,7 +22,8 @@ log = structlog.get_logger()
 Message = dict[str, Any]
 
 TERMINAL_TYPES: Final = frozenset({"completed", "failed", "cancelled"})
-
+_RANKS = {"status": 0, "progress": 1, "completed": 2, "failed": 2, "cancelled": 2}
+_STAGE_INDEX = {stage.value: index for index, stage in enumerate(PIPELINE_STAGES)}
 
 # ── Message builders (the WebSocket wire format) ─────────────────────────────
 
@@ -162,3 +169,24 @@ def initial_message(
         if isinstance(run, int) and run >= recording.run:
             return stored
     return snapshot_message(recording, stages)
+
+
+def state_position(message: Message) -> tuple[int, int, int, int, int]:
+    """Where a state message sits in the life of a recording; larger is newer.
+    Mirrors the Lua script that guards the stored state."""
+    rank = _RANKS.get(str(message.get("type")), 1)
+    run = int(message.get("run") or 0)
+    if rank != 1:
+        return (run, rank, 0, 0, 0)
+    stage = _STAGE_INDEX.get(str(message.get("stage")), 0)
+    return (run, rank, stage, int(message.get("attempt") or 1), int(message.get("percent") or 0))
+
+
+def is_stale(message: Message, last: Message | None) -> bool:
+    """True if the message is older than, or the same as, the last state sent to the client.
+    Segments are not state: only those of an older run are dropped."""
+    if last is None:
+        return False
+    if message.get("type") == "segment":
+        return int(message.get("run") or 0) < int(last.get("run") or 0)
+    return state_position(message) <= state_position(last)

@@ -11,12 +11,15 @@ from scribe.application.progress import (
     ProgressPublisher,
     completed_message,
     initial_message,
+    is_stale,
     progress_message,
+    segment_message,
     snapshot_message,
     status_message,
 )
 from scribe.domain.pipeline import PIPELINE_STAGES, ProcessingStage, StageName, overall_percent
 from scribe.domain.recordings import Recording, RecordingStatus
+from scribe.domain.transcript import Segment
 from tests.unit.fakes import FakeDb, FakeProgressPublisher, FakeUnitOfWork
 from tests.unit.test_domain_recording import make_recording
 
@@ -165,3 +168,22 @@ async def test_best_effort_publisher_never_raises_or_hangs() -> None:
     publisher = BestEffortPublisher(BrokenPublisher(), timeout_sec=0.05)
     await publisher.publish_state(RID, {})
     await publisher.publish_transient(RID, {})
+
+
+def test_stale_messages_are_recognized() -> None:
+    rid = UUID(int=9)
+    last = progress_message(rid, 1, StageName.TRANSCRIBE, 80, attempt=1)
+
+    assert not is_stale(last, None)
+    assert is_stale(progress_message(rid, 1, StageName.TRANSCRIBE, 30, attempt=1), last)
+    assert is_stale(last, last)  # the same message seen as state and as stream
+    assert is_stale(progress_message(rid, 1, StageName.EXTRACT_AUDIO, 100), last)
+    assert is_stale(status_message(rid, 1, "processing"), last)
+    assert not is_stale(progress_message(rid, 1, StageName.TRANSCRIBE, 0, attempt=2), last)
+    assert not is_stale(progress_message(rid, 1, StageName.BUILD_SUBTITLES, 5), last)
+    assert not is_stale(completed_message(rid, 1), last)
+    assert not is_stale(status_message(rid, 2, "processing"), last)  # a retry starts a new run
+
+    segment = Segment(0.0, 1.0, "x")
+    assert is_stale(segment_message(rid, 0, segment), last)  # a segment of an older run
+    assert not is_stale(segment_message(rid, 1, segment), last)

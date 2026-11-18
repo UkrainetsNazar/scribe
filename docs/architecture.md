@@ -277,9 +277,12 @@ erDiagram
 
 - **Events are not lost:** an event is committed together with the state change; the relay marks it
   published only after the broker confirmed it. A crash in between publishes it twice.
-- **Effects are not doubled:** a consumer commits its inbox row, the handler's database changes and
-  nothing else in one transaction; a duplicate finds the row and is skipped. Calls to external
-  systems (webhooks) are at-least-once and carry a stable delivery id.
+- **Effects are not doubled in the database:** a consumer commits its inbox row and the handler's
+  database changes in one transaction; a duplicate finds the row and is skipped. Calls to external
+  systems (webhooks) are at-least-once with a stable delivery id. A pipeline stage can be delivered
+  twice: every start of a stage takes a numbered claim, and only the holder of the latest claim may
+  report progress, complete or fail it. A superseded execution can still run handler code and write
+  artifacts before its next claim check. The claim protects database state and progress.
 - **Progress is eventually consistent:** status changes are reliable (outbox); stage progress and
   partial segments go straight to Redis, are best effort and never fail a stage. The stored state
   never moves backwards within a run.

@@ -221,7 +221,8 @@ class RetryRecording:
 
 
 class CancelRecording:
-    """processing -> cancelled. Running stages notice it at their next progress report."""
+    """processing -> cancelled. Allowed only from `processing` (409 otherwise, also for a repeated
+    call). Running stages notice it at their next progress report."""
 
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
@@ -231,8 +232,6 @@ class CancelRecording:
             recording = await uow.recordings.get(recording_id, owner_id, for_update=True)
             if recording is None:
                 raise NotFoundError("Recording not found")
-            if recording.status is RecordingStatus.CANCELLED:
-                return recording  # idempotent
             recording.cancel()  # 409 unless processing
             await uow.recordings.save(recording)
             uow.add_events(recording.pull_events())

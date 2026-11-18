@@ -11,6 +11,7 @@ from scribe.application.progress import (
     Message,
     ProgressSubscriber,
     initial_message,
+    is_stale,
 )
 from scribe.application.use_cases.auth import GetUser
 from scribe.application.use_cases.recordings import GetRecording
@@ -69,13 +70,16 @@ async def recording_events(
         async with subscriber.subscribe(recording_id) as subscription:
             first = initial_message(await subscription.last_state(), view.recording, view.stages)
             alive = await _send(websocket, first)
+            last = first
             if alive and first.get("type") not in TERMINAL_TYPES:
                 watcher = asyncio.create_task(_wait_for_disconnect(websocket))
                 while alive and not watcher.done():
                     update = await subscription.next_message(POLL_INTERVAL_SEC)
-                    if update is None:
+                    if update is None or is_stale(update, last):
                         continue
                     alive = await _send(websocket, update)
+                    if update.get("type") != "segment":
+                        last = update
                     if update.get("type") in TERMINAL_TYPES:
                         break
     finally:

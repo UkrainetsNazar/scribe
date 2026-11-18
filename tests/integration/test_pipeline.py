@@ -169,9 +169,10 @@ async def test_cancel_and_retry_endpoints(api_client: httpx.AsyncClient) -> None
     await api_client.post(f"{API}/recordings/{recording_id}/complete-upload", headers=headers)
     base = f"{API}/recordings/{recording_id}"
 
-    for _ in range(2):  # idempotent
-        resp = await api_client.post(f"{base}/cancel", headers=headers)
-        assert resp.status_code == 202 and resp.json()["status"] == "cancelled"
+    first = await api_client.post(f"{base}/cancel", headers=headers)
+    assert first.status_code == 202 and first.json()["status"] == "cancelled"
+    again = await api_client.post(f"{base}/cancel", headers=headers)
+    assert again.status_code == 409 and again.json()["code"] == "INVALID_STATE"
     for _ in range(2):  # idempotent
         resp = await api_client.post(f"{base}/retry", headers=headers)
         assert resp.status_code == 202 and resp.json()["status"] == "processing"

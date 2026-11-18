@@ -1,3 +1,4 @@
+import asyncio
 from uuid import UUID
 
 import pytest
@@ -7,6 +8,7 @@ from scribe.application.inbox import InboundEvent, PermanentHandlerError
 from scribe.application.interfaces import UnitOfWorkFactory
 from scribe.application.pipeline import (
     StageContext,
+    StageExecutionError,
     StageHandler,
     StageOutcome,
     StageResult,
@@ -126,24 +128,96 @@ async def test_cancel_during_stage_is_noticed_at_progress_report(
     assert db.stages[(recording.id, first)].status is StageStatus.RUNNING  # reset by retry later
 
 
-async def test_handler_error_propagates_and_mark_failed_fails_the_recording(
+async def test_handler_error_is_wrapped_and_mark_failed_fails_the_recording(
     db: FakeDb, uow_factory: UnitOfWorkFactory
 ) -> None:
     first = StageName.EXTRACT_AUDIO
     runner, _ = _runner(uow_factory, {first: FakeHandler(first, error=RuntimeError("boom"))})
     recording = await _processing(db, uow_factory)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(StageExecutionError) as failure:
         await runner.execute(recording.id, recording.owner_id, 1, first)
+    assert isinstance(failure.value.cause, RuntimeError)
     stage = db.stages[(recording.id, first)]
     assert (stage.status, stage.attempts) == (StageStatus.RUNNING, 1)
 
-    assert await runner.mark_failed(recording.id, recording.owner_id, 1, first, "boom") is True
+    claim = failure.value.claim
+    assert (
+        await runner.mark_failed(recording.id, recording.owner_id, 1, first, "boom", claim) is True
+    )
     assert recording.status is RecordingStatus.FAILED
     assert stage.status is StageStatus.FAILED
     assert [type(e) for e in db.events] == [RecordingFailed]
     # A second call for the same (now failed) run does nothing
-    assert await runner.mark_failed(recording.id, recording.owner_id, 1, first, "x") is False
+    assert await runner.mark_failed(recording.id, recording.owner_id, 1, first, "x", claim) is False
+
+
+class GateHandler(StageHandler):
+    """The first execution waits at a gate; every later one runs straight through."""
+
+    name = StageName.EXTRACT_AUDIO
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.first_started = asyncio.Event()
+        self.release_first = asyncio.Event()
+
+    async def execute(self, ctx: StageContext) -> StageResult | None:
+        self.calls += 1
+        if self.calls == 1:
+            self.first_started.set()
+            await self.release_first.wait()
+            await ctx.progress(75)  # claimed again meanwhile: raises StageAborted
+            return None
+        await ctx.progress(33)
+        return None
+
+
+async def test_a_redelivered_stage_cannot_be_corrupted_by_the_older_execution(
+    db: FakeDb, uow_factory: UnitOfWorkFactory
+) -> None:
+    first = StageName.EXTRACT_AUDIO
+    events, gate = FakeProgressPublisher(), GateHandler()
+    runner = StageRunner(uow_factory, [gate], events)
+    recording = await _processing(db, uow_factory)
+
+    older = asyncio.create_task(runner.execute(recording.id, recording.owner_id, 1, first))
+    await asyncio.wait_for(gate.first_started.wait(), timeout=5)
+    newer = await runner.execute(recording.id, recording.owner_id, 1, first)  # redelivery
+    gate.release_first.set()
+
+    assert (await asyncio.wait_for(older, timeout=5), newer) == (
+        StageOutcome.SKIPPED,
+        StageOutcome.COMPLETED,
+    )
+    stage = db.stages[(recording.id, first)]
+    assert (stage.status, stage.attempts, stage.progress) == (StageStatus.COMPLETED, 2, 100)
+    assert [(m["attempt"], m["percent"]) for _, m in events.states] == [
+        (1, 0),
+        (2, 0),
+        (2, 33),
+        (2, 100),  # nothing from the older execution after the takeover
+    ]
+
+
+async def test_a_stale_failure_cannot_fail_the_recording(
+    db: FakeDb, uow_factory: UnitOfWorkFactory
+) -> None:
+    first = StageName.EXTRACT_AUDIO
+    runner, _ = _runner(uow_factory)
+    recording = await _processing(db, uow_factory)
+    async with uow_factory() as uow:  # attempt 1 starts, then a redelivery claims the stage again
+        for _ in range(2):
+            stage = await uow.stages.get(recording.id, first)
+            assert stage is not None
+            stage.start()
+            await uow.stages.save(stage)
+            await uow.commit()
+
+    assert await runner.mark_failed(recording.id, recording.owner_id, 1, first, "late", 1) is False
+    assert recording.status is RecordingStatus.PROCESSING
+    assert await runner.mark_failed(recording.id, recording.owner_id, 1, first, "real", 2) is True
+    assert recording.status is RecordingStatus.FAILED
 
 
 async def test_pipeline_start_handler() -> None:

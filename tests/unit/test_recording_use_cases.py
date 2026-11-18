@@ -276,7 +276,8 @@ async def test_cancel_then_retry(
     assert db.recordings[recording.id].run == 1
 
     assert (await cancel.execute(user.id, recording.id)).status is RecordingStatus.CANCELLED
-    assert (await cancel.execute(user.id, recording.id)).status is RecordingStatus.CANCELLED
+    with pytest.raises(InvalidStateError):  # cancel works only from `processing`
+        await cancel.execute(user.id, recording.id)
 
     retried = await retry.execute(user.id, recording.id)
     assert retried.status is RecordingStatus.PROCESSING
