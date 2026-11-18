@@ -16,6 +16,8 @@ from scribe.application.interfaces import (
     PasswordHasher,
     PlanRepository,
     ProjectRepository,
+    RateLimitDecision,
+    RateLimiter,
     RecordingRepository,
     RefreshTokenStore,
     StageRepository,
@@ -473,6 +475,7 @@ class FakeTranscriptReader(TranscriptReader):
     def __init__(self) -> None:
         self.segments: dict[UUID, list[Segment]] = {}
         self.summaries: dict[UUID, Summary] = {}
+        self.scanned = 0
 
     async def list_segments(
         self, recording_id: UUID, owner_id: UUID, *, from_sec: float, after_idx: int, limit: int
@@ -495,7 +498,9 @@ class FakeTranscriptReader(TranscriptReader):
             for idx, segment in enumerate(segments)
             if any(term in segment.text.lower() for term in terms)
         ]
-        return hits[skip : skip + limit]
+        page = hits[skip : skip + limit]
+        self.scanned += len(page)
+        return page
 
 
 class FakeWebhookSender(WebhookSender):
@@ -507,3 +512,19 @@ class FakeWebhookSender(WebhookSender):
         if self.error is not None:
             raise self.error
         self.sent.append(delivery)
+
+
+class FakeRateLimiter(RateLimiter):
+    def __init__(
+        self, allowed: bool = True, retry_after_sec: int = 7, error: Exception | None = None
+    ) -> None:
+        self.calls: list[tuple[str, int, int]] = []
+        self._allowed = allowed
+        self._retry_after = retry_after_sec
+        self._error = error
+
+    async def hit(self, key: str, limit: int, window_sec: int) -> RateLimitDecision:
+        if self._error is not None:
+            raise self._error
+        self.calls.append((key, limit, window_sec))
+        return RateLimitDecision(self._allowed, 0 if self._allowed else self._retry_after)

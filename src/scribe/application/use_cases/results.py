@@ -103,7 +103,8 @@ class SearchTranscripts:
         scanned = 0
         batch = max(limit * 4, 50)
         while len(results) < limit and scanned < SEARCH_MAX_SCANNED_HITS:
-            hits = await self._reader.search(owner_id, query, skip=scanned, limit=batch)
+            size = min(batch, SEARCH_MAX_SCANNED_HITS - scanned)  # never read past the cap
+            hits = await self._reader.search(owner_id, query, skip=scanned, limit=size)
             if not hits:
                 break
             scanned += len(hits)
@@ -124,6 +125,6 @@ class SearchTranscripts:
                 )
                 if len(results) == limit:
                     break
-            if len(hits) < batch:
+            if len(hits) < size:
                 break
         return results

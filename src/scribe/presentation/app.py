@@ -11,6 +11,7 @@ from scribe.infrastructure.telemetry import setup_tracing
 from scribe.presentation.errors import register_exception_handlers
 from scribe.presentation.http_metrics import HttpMetricsMiddleware
 from scribe.presentation.middleware import TraceIdMiddleware
+from scribe.presentation.openapi import install_problem_responses
 from scribe.presentation.routers import (
     auth,
     health,
@@ -104,4 +105,5 @@ def create_app(container: Container | None = None) -> FastAPI:
         app.include_router(internal.router)
     if serves_ws:
         app.include_router(ws.router)
+    install_problem_responses(app)
     return app

@@ -6,7 +6,12 @@ import pytest
 
 from scribe.application.interfaces import UnitOfWorkFactory
 from scribe.application.use_cases.exports import CreateExport, GetExportLink
-from scribe.application.use_cases.results import GetSummary, GetTranscript, SearchTranscripts
+from scribe.application.use_cases.results import (
+    SEARCH_MAX_SCANNED_HITS,
+    GetSummary,
+    GetTranscript,
+    SearchTranscripts,
+)
 from scribe.domain.errors import (
     BadRequestError,
     DomainValidationError,
@@ -208,3 +213,15 @@ async def test_hits_of_invisible_recordings_do_not_hide_visible_ones(
 
     found = await SearchTranscripts(uow_factory, reader).execute(owner, "budget", None, 1)
     assert [r.recording_id for r in found] == [visible.id]
+
+
+async def test_search_never_scans_more_hits_than_the_cap(
+    db: FakeDb, reader: FakeTranscriptReader, uow_factory: UnitOfWorkFactory
+) -> None:
+    owner = uuid4()
+    for _ in range(SEARCH_MAX_SCANNED_HITS + 100):
+        _recording(db, reader, ["budget"], owner_id=owner, status=RecordingStatus.PROCESSING)
+
+    found = await SearchTranscripts(uow_factory, reader).execute(owner, "budget", None, 99)
+    assert found == []
+    assert reader.scanned == SEARCH_MAX_SCANNED_HITS

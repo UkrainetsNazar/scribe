@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from scribe.domain.errors import AppError
+from scribe.domain.errors import AppError, RateLimitedError
 
 log = structlog.get_logger()
 
@@ -72,8 +72,18 @@ def _problem(
 
 async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, AppError)
-    status, title = PROBLEMS.get(exc.code, PROBLEMS["INTERNAL_ERROR"])
-    return _problem(request, status=status, code=exc.code, title=title, detail=exc.message)
+    http_status, title = PROBLEMS.get(exc.code, PROBLEMS["INTERNAL_ERROR"])
+    headers = (
+        {"Retry-After": str(exc.retry_after_sec)} if isinstance(exc, RateLimitedError) else None
+    )
+    return _problem(
+        request,
+        status=http_status,
+        code=exc.code,
+        title=title,
+        detail=exc.message,
+        headers=headers,
+    )
 
 
 async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:

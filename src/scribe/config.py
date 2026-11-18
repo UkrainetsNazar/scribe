@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     webhook_timeout_sec: float = 10.0
     webhook_allow_private_networks: bool = False
 
+    # Per user and route (Redis sliding window). Expensive routes have the stricter limit.
+    rate_limit_per_minute: int = 300
+    rate_limit_heavy_per_minute: int = 60
+    rate_limit_window_sec: int = 60
+
     @model_validator(mode="after")
     def _jwt_secret_must_be_private(self) -> Self:
         """The default is public (it is in the repository): only automated tests may use it."""

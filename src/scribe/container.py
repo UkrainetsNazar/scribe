@@ -58,6 +58,7 @@ from scribe.infrastructure.mongo import (
     get_database,
 )
 from scribe.infrastructure.progress_bus import RedisProgressBus
+from scribe.infrastructure.rate_limit import RedisRateLimiter
 from scribe.infrastructure.readiness import ReadinessChecker
 from scribe.infrastructure.redis_client import create_redis
 from scribe.infrastructure.security.passwords import Argon2PasswordHasher
@@ -112,6 +113,7 @@ class Container(containers.DeclarativeContainer):
         refresh_ttl_days=settings.provided.refresh_token_ttl_days,
     )
     refresh_store = providers.Singleton(RedisRefreshTokenStore, redis=redis)
+    rate_limiter = providers.Singleton(RedisRateLimiter, redis=redis)
     media_probe = providers.Singleton(
         FfprobeMediaProbe,
         binary=settings.provided.ffprobe_bin,

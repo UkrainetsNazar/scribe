@@ -79,3 +79,12 @@ class DependencyUnavailableError(AppError):
 class QuotaExceededError(AppError):
     code = "QUOTA_EXCEEDED"
     default_message = "Monthly processing quota exceeded"
+
+
+class RateLimitedError(AppError):
+    code = "RATE_LIMITED"
+    default_message = "Too many requests"
+
+    def __init__(self, retry_after_sec: int = 1) -> None:
+        super().__init__()
+        self.retry_after_sec = max(1, retry_after_sec)

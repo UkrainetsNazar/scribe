@@ -222,6 +222,18 @@ class RefreshTokenStore(ABC):
     async def revoke(self, jti: str) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class RateLimitDecision:
+    allowed: bool
+    retry_after_sec: int = 0
+
+
+class RateLimiter(ABC):
+    @abstractmethod
+    async def hit(self, key: str, limit: int, window_sec: int) -> RateLimitDecision:
+        """Counts one request in a sliding window of `window_sec` seconds."""
+
+
 # ── Storage and media ────────────────────────────────────────────────────────
 
 
