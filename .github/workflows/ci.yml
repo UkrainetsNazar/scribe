@@ -33,7 +33,8 @@ jobs:
       - name: Configure
         run: |
           cp .env.example .env
-          echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
+          printf '\nJWT_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env
+          grep -c '^JWT_SECRET=.\{32,\}' .env  # fails the step early if the secret is missing (not printed)
       - name: Start the stack
         run: docker compose up -d --build
       - name: Wait until the gateway reports ready
