@@ -61,6 +61,10 @@ if current then
     if incoming_rank < stored_rank then
       return 0
     end
+    if incoming.type == 'status' and stored.type == 'status'
+        and incoming.status == stored.status then
+      return 0
+    end
     if incoming_rank == 2 and stored_rank == 2 then
       return 0
     end

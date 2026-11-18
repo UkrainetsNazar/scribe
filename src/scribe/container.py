@@ -250,6 +250,7 @@ class Container(containers.DeclarativeContainer):
         probe=media_probe,
         uploads_bucket=settings.provided.minio_bucket_uploads,
         artifacts_bucket=settings.provided.minio_bucket_artifacts,
+        progress=providers.Singleton(BestEffortPublisher, inner=progress_bus, timeout_sec=0.25),
     )
     retry_recording = providers.Factory(RetryRecording, uow_factory=uow.provider)
     cancel_recording = providers.Factory(CancelRecording, uow_factory=uow.provider)

@@ -103,6 +103,8 @@ sequenceDiagram
     A->>P: state processing, charge the quota, create the stages
     A->>P: outbox event processing_requested
     end
+    A->>X: publish processing status (best effort, after commit)
+    X-->>C: WebSocket: status processing
     A-->>C: 202
     R->>P: SELECT ... FOR UPDATE SKIP LOCKED
     R->>Q: publish with publisher confirms
@@ -110,8 +112,7 @@ sequenceDiagram
     Q->>K: processing_requested
     K->>P: inbox row and handler in one transaction
     K->>Q: dispatch stage 1 (Celery)
-    K->>X: store the state and publish it
-    X-->>C: WebSocket: status processing
+    K->>X: publish processing status as fallback (Redis suppresses duplicates)
     loop six stages
         Q->>W: stage task
         W->>S: read and write artifacts

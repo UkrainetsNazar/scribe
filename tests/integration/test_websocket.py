@@ -27,8 +27,14 @@ from scribe.domain.pipeline import StageName
 from scribe.domain.transcript import Segment
 from scribe.infrastructure.progress_bus import RedisProgressBus
 from scribe.presentation.app import create_app
-from tests.integration.helpers import auth_headers
-from tests.integration.test_recordings_api import _create_recording, _project
+from tests.integration.helpers import API, auth_headers
+from tests.integration.test_recordings_api import (
+    _create_recording,
+    _project,
+    _recording_with_upload,
+    make_wav,
+    requires_ffprobe,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -147,6 +153,29 @@ async def test_events_are_streamed_and_the_connection_closes_after_completion(
         assert done["type"] == "completed"
         with pytest.raises(ConnectionClosedOK):
             await asyncio.wait_for(ws.recv(), timeout=5)
+
+
+@requires_ffprobe
+async def test_complete_upload_notifies_websocket_without_relay(
+    live_server: LiveServer, bus: RedisProgressBus
+) -> None:
+    async with httpx.AsyncClient(base_url=live_server.http_url) as client:
+        headers = await auth_headers(client)
+        rid = UUID(await _recording_with_upload(client, headers, make_wav()))
+        token = headers["Authorization"].removeprefix("Bearer ")
+        async with connect(_url(live_server, rid, token)) as ws:
+            assert (await _recv(ws))["status"] == "created"
+            response = await client.post(f"{API}/recordings/{rid}/complete-upload", headers=headers)
+            assert response.status_code == 202
+            processing = status_message(rid, 1, "processing")
+            first = json.loads(await asyncio.wait_for(ws.recv(), timeout=1))
+            assert first == processing
+
+            # Simulate the consumer later delivering the same status from the outbox.
+            await bus.publish_state(rid, processing)
+            completed = completed_message(rid, 1)
+            await bus.publish_state(rid, completed)
+            assert await _recv(ws) == completed
 
 
 async def test_reconnecting_client_receives_the_last_stored_state(

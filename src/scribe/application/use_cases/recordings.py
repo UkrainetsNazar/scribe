@@ -10,6 +10,7 @@ from scribe.application.interfaces import (
     UnitOfWorkFactory,
 )
 from scribe.application.pagination import Cursor, Page, build_page, decode_cursor
+from scribe.application.progress import NullProgressPublisher, ProgressPublisher, status_message
 from scribe.domain.errors import (
     AppError,
     InvalidMediaError,
@@ -106,12 +107,14 @@ class CompleteUpload:
         probe: MediaProbe,
         uploads_bucket: str,
         artifacts_bucket: str,
+        progress: ProgressPublisher | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._storage = storage
         self._probe = probe
         self._uploads = uploads_bucket
         self._artifacts = artifacts_bucket
+        self._progress = progress if progress is not None else NullProgressPublisher()
 
     async def execute(self, owner_id: UUID, recording_id: UUID) -> Recording:
         async with self._uow_factory() as uow:
@@ -183,6 +186,11 @@ class CompleteUpload:
             await uow.recordings.save(recording)
             uow.add_events(recording.pull_events())
             await uow.commit()
+        # Tell connected clients immediately after commit. The outbox delivers the same status
+        # through the broker if this best-effort notification cannot reach Redis.
+        await self._progress.publish_state(
+            recording.id, status_message(recording.id, recording.run, recording.status.value)
+        )
         return recording
 
     @staticmethod
