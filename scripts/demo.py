@@ -111,7 +111,7 @@ async def run(args: argparse.Namespace) -> int:
         project_id = project.json()["id"]
         if args.file:
             path = Path(args.file)
-            data, filename = path.read_bytes(), path.name
+            data, filename = await asyncio.to_thread(path.read_bytes), path.name
             content_type = CONTENT_TYPES.get(path.suffix.lower())
             if content_type is None:
                 raise SystemExit(f"Unsupported file type: {path.suffix}")
@@ -188,14 +188,14 @@ async def run(args: argparse.Namespace) -> int:
 
         step(f"Exports (saved to {args.output}/)")
         out = Path(args.output)
-        out.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(out.mkdir, parents=True, exist_ok=True)
         for fmt in ("txt", "srt", "vtt", "json"):
             base_path = f"{API}/recordings/{recording_id}/exports"
             await client.post(base_path, json={"format": fmt}, headers=headers)
             link = (await client.get(f"{base_path}/{fmt}", headers=headers)).json()
             async with httpx.AsyncClient() as raw:
                 content = (await raw.get(link["url"])).content
-            (out / f"{recording_id}.{fmt}").write_bytes(content)
+            await asyncio.to_thread((out / f"{recording_id}.{fmt}").write_bytes, content)
             print(f"  {fmt}: {len(content)} bytes")
 
         step("Where to look next")
