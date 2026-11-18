@@ -21,12 +21,12 @@ Requirements: Docker (Compose v2), [uv](https://docs.astral.sh/uv/), `openssl`.
 ```bash
 git clone <repository-url> scribe && cd scribe
 cp .env.example .env
-echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
+printf '\nJWT_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env
 
 docker compose up --build -d
-until curl -fsS localhost:8010/health/ready; do sleep 2; done
+for i in $(seq 1 90); do curl -fsS --max-time 5 localhost:8010/health/ready && break; sleep 2; done
 
-uv run python scripts/demo.py
+curl -fsS --max-time 5 localhost:8010/health/ready && uv run python scripts/demo.py
 ```
 
 The first build takes a few minutes. The demo registers a user, uploads a generated tone, shows the
@@ -104,10 +104,10 @@ docker compose up -d --build
 uv run pytest tests/e2e -m e2e -v -s
 ```
 
-Load test (Locust, against the gateway; the verdict is p95 < 200 ms and < 1% failures):
+Load test (the verdict is p95 < 200 ms for every API request (export and the direct MinIO upload are not judged), < 1% failures and at least 20 samples per request):
 
 ```bash
-uv run locust -f loadtests/locustfile.py --headless -u 20 -r 1 -t 2m \
+uv run locust -f loadtests/locustfile.py --headless -u 20 -r 1 -t 3m \
   --host http://localhost:8010 --csv load-results
 # or with a web UI at http://localhost:8089:  uv run locust -f loadtests/locustfile.py --host http://localhost:8010
 ```
@@ -137,7 +137,7 @@ Settings come from environment variables (see `src/scribe/config.py`; `.env` is 
 | `ACCESS_TOKEN_TTL_MIN` / `REFRESH_TOKEN_TTL_DAYS` | `15` / `7` | token lifetimes |
 | `PRESIGNED_URL_TTL_MIN` | `15` | lifetime of upload and download URLs |
 | `OTLP_ENDPOINT` | unset | OTLP/HTTP endpoint (for example `http://jaeger:4318`); tracing is off when unset |
-| `WEBHOOK_ALLOW_PRIVATE_NETWORKS` | `false` (compose: `true`) | must stay `false` in production (SSRF protection) |
+| `WEBHOOK_ALLOW_PRIVATE_NETWORKS` | `false` | set to `true` in `.env` only for a local webhook receiver |
 | `APP_ROLE` | `all` | `api`, `ws` or `all`: which routes a process serves |
 
 Plans (`free` 300 min/month, `pro`, `business`) live in the `plans` table.
@@ -174,10 +174,11 @@ scripts/           demo, webhook receiver, dashboard generator
 
 ## Known limitations
 
-- A presigned PUT cannot restrict size or content type, so both are checked after the upload,
-  and the validated file is copied to a private key before it is processed.
+- Presigned PUT size and media type are checked after upload. Uploads are subject to a one-day
+  bucket lifecycle, including objects uploaded again after deletion. The validated private copy
+  lives with the recording's artifacts.
 - Cancelling is noticed at the next progress report; a running FFmpeg or Whisper call finishes.
-- Deleting a project does not delete its recordings; deleting a recording removes its files,
+- Deleting a project does not delete its recordings. Deleting a recording removes its files,
   documents and rows asynchronously.
 - Webhook secrets are stored unencrypted and rotating a secret has no grace period.
 - The gateway's own errors (429, unrouted paths, 5xx) are plain text, not RFC 7807.

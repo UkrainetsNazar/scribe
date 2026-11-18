@@ -7,6 +7,7 @@ from scribe.infrastructure.db.base import Base
 from scribe.infrastructure.messaging.topology import QUEUES
 
 DOC = Path(__file__).resolve().parents[2] / "docs" / "architecture.md"
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _diagram(kind: str) -> str:
@@ -51,3 +52,13 @@ def test_topology_diagram_mentions_every_queue_and_routing_key() -> None:
         assert spec.name in text, spec.name
         for key in spec.routing_keys:
             assert key in text, key
+
+
+def test_env_example_ends_with_a_newline() -> None:
+    assert (ROOT / ".env.example").read_bytes().endswith(b"\n")
+
+
+def test_readme_appends_the_secret_on_its_own_line() -> None:
+    readme = (ROOT / "README.md").read_text()
+    assert 'echo "JWT_SECRET' not in readme
+    assert "printf '\\nJWT_SECRET=%s\\n'" in readme
